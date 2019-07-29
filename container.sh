@@ -26,10 +26,10 @@ function cleanup() {
 function prepare_image() {
 	# Create/recreate filesystem
 	rm -rf $FS_ROOT
-
 	mkdir $FS_ROOT
 
-	tar -xf alpine.tar -C $FS_ROOT
+	echo Prepare fs based on $1
+	tar -xf $1 -C $FS_ROOT
 }
 
 function prepare_mount() {
@@ -88,12 +88,12 @@ function configure_network() {
 }
 
 function prepare_container() {
-	prepare_image
+	prepare_image $1
 	prepare_mount
 }
 
 function start_container() {
-	prepare_container
+	prepare_container $1
 
 	sh -c 'echo $$; exec unshare --mount --uts --ipc --net --pid -f --user --map-root-user chroot $PWD/rootfs /bin/sh'
 	
@@ -101,8 +101,6 @@ function start_container() {
 }
 
 function configure_container() {
-
-	echo $1
 	NS=$(pgrep -P $1)
 	export NS
 	
@@ -111,19 +109,37 @@ function configure_container() {
 	configure_network
 }
 
+function export_image() {
+	CONTAINER_ID=$(docker run -d --rm $1)
+	docker export --output=$1.tar $CONTAINER_ID
+	docker stop $CONTAINER_ID
+}
+
 case "$1" in 
-  start) 
-	start_container
+  start)
+	if [ $# -ne 2 ]; then
+		echo "Usage: $0 start <image file>"
+		exit 1
+	fi
+	start_container $2
 	;;
 	
   configure)
 	if [ $# -ne 2 ]; then
-		echo "Usage: $0 configure <parent_pid>"
+		echo "Usage: $0 configure <parent pid>"
 		exit 1
 	fi
 	configure_container $2
 	;;
-  *) echo $"Usage: $0 {start|configure}"
+  
+  export)
+    if [ $# -ne 2 ]; then
+		echo "Usage: $0 export <image name>"
+		exit 1
+	fi
+	export_image $2
+	;;
+  *) echo $"Usage: $0 {start|configure|export}"
      exit 1
 esac
 
