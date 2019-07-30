@@ -14,22 +14,27 @@ CON_MOUNT=$FS_ROOT/etc/demo
 HOSTIF='enp0s3'
 CONTAINERIF='con0'
 
-function cleanup() {
-	# Remove mount point
-	umount $CON_MOUNT
-
-	# Remove iptable entries
-	iptables -S | sed "/handBuildContainer/s/-A/iptables -D/e" &> /dev/null
-	iptables -t nat -S | sed "/handBuildContainer/s/-A/iptables -t nat -D/e" &> /dev/null
-}
-
+###########################################################################################
+## Start Container
+###########################################################################################
 function prepare_image() {
+	if [ ! -f "$1" ]; then
+		echo "Can't find image $1"
+		exit 128
+	fi
+
 	# Create/recreate filesystem
 	rm -rf $FS_ROOT
 	mkdir $FS_ROOT
 
 	echo Prepare fs based on $1
 	tar -xf $1 -C $FS_ROOT
+	
+	echo nameserver 8.8.8.8 > ${FS_ROOT}/etc/resolv.conf 
+	echo container > ${FS_ROOT}/etc/hostname
+	echo 127.0.0.1        localhost > ${FS_ROOT}/etc/hosts
+	echo 10.1.0.1         container > ${FS_ROOT}/etc/hosts
+	echo 10.1.0.1         docker > ${FS_ROOT}/etc/hosts
 }
 
 function prepare_mount() {
@@ -38,15 +43,48 @@ function prepare_mount() {
 	[ -d $CON_MOUNT ] || mkdir -p $CON_MOUNT
 
 	mount --make-shared --bind $HOST_MOUNT $CON_MOUNT
+	
+	mount -t sysfs none ${FS_ROOT}/sys
 }
 
-function mount_virtual_fs() {
-	echo $NS
-	# Mount Virtual File Systems
-	nsenter -t $NS -m -u -i -n -p chroot $FS_ROOT /bin/mount -t proc none /proc
-	nsenter -t $NS -m -u -i -n -p chroot $FS_ROOT /bin/mount -t sysfs none /sys
+function prepare_devices() {
+	mknod -m 666 ${FS_ROOT}/dev/full c 1 7
+	mknod -m 666 ${FS_ROOT}/dev/ptmx c 5 2
+	mknod -m 644 ${FS_ROOT}/dev/random c 1 8
+	mknod -m 644 ${FS_ROOT}/dev/urandom c 1 9
+	mknod -m 666 ${FS_ROOT}/dev/zero c 1 5
+	mknod -m 666 ${FS_ROOT}/dev/tty c 5 0
+	mknod -m 666 ${FS_ROOT}/dev/null c 1 3
 }
 
+function prepare_container() {
+	prepare_image $1
+	prepare_mount
+	prepare_devices
+}
+
+function cleanup() {
+	# Remove mount point
+	umount $CON_MOUNT
+	umount ${FS_ROOT}/sys
+
+	# Remove iptable entries
+	iptables -S | sed "/handBuildContainer/s/-A/iptables -D/e" &> /dev/null
+	iptables -t nat -S | sed "/handBuildContainer/s/-A/iptables -t nat -D/e" &> /dev/null
+}
+
+function start_container() {
+	prepare_container $1
+
+	echo CMD: $2
+	sh -c "echo $$; exec unshare --mount --uts --ipc --net --pid -f --user --map-root-user chroot $PWD/rootfs sh -c '/bin/mount -t proc none /proc && $2'"
+	
+	cleanup
+}
+
+###########################################################################################
+## Configure Container
+###########################################################################################
 function create_virtual_network() {
 	if [ ! -d /var/run/netns ]; then
 		mkdir /var/run/netns
@@ -81,47 +119,44 @@ function configure_network() {
 	iptables -t nat -A POSTROUTING -o $HOSTIF -j MASQUERADE -m comment --comment "handBuildContainer"
 	iptables -A FORWARD -i $HOSTIF -o $CONTAINERIF -m state --state RELATED,ESTABLISHED -j ACCEPT -m comment --comment "handBuildContainer"
 	iptables -A FORWARD -i $CONTAINERIF -o $HOSTIF -j ACCEPT -m comment --comment "handBuildContainer"
-
-	# DNS and hostname
-	nsenter -t $NS -m -u -i -n -p chroot $PWD/rootfs /bin/sh -c 'echo nameserver 8.8.8.8 > /etc/resolv.conf'
-	nsenter -t $NS -m -u -i -n -p chroot $PWD/rootfs /bin/sh -c 'echo container > /etc/hostname'
-}
-
-function prepare_container() {
-	prepare_image $1
-	prepare_mount
-}
-
-function start_container() {
-	prepare_container $1
-
-	sh -c 'echo $$; exec unshare --mount --uts --ipc --net --pid -f --user --map-root-user chroot $PWD/rootfs /bin/sh'
-	
-	cleanup
 }
 
 function configure_container() {
 	NS=$(pgrep -P $1)
 	export NS
 	
-	mount_virtual_fs
 	create_virtual_network
 	configure_network
 }
 
+###########################################################################################
+## Export Image
+###########################################################################################
 function export_image() {
 	CONTAINER_ID=$(docker run -d --rm $1)
 	docker export --output=$1.tar $CONTAINER_ID
 	docker stop $CONTAINER_ID
 }
 
+###########################################################################################
+## Expose
+###########################################################################################
+function expose_port() {
+	iptables -t nat -A PREROUTING ! -i con0 -p tcp -m tcp --dport $1 -j DNAT --to-destination 10.1.0.1:$2 -m comment --comment "handBuildContainer"
+	iptables -t nat -A POSTROUTING -s 10.1.0.1/32 -d 10.1.0.1/32 -p tcp -m tcp --dport $2 -j MASQUERADE -m comment --comment "handBuildContainer"
+	iptables -A FORWARD -d 10.1.0.1/32 ! -i con0 -o con0 -p tcp -m tcp --dport $2 -j ACCEPT -m comment --comment "handBuildContainer"
+}
+
+###########################################################################################
+## Parse Arguments
+###########################################################################################
 case "$1" in 
   start)
-	if [ $# -ne 2 ]; then
-		echo "Usage: $0 start <image file>"
+	if [ $# -ne 3 ]; then
+		echo "Usage: $0 start <image file> <cmd>"
 		exit 1
 	fi
-	start_container $2
+	start_container $2 "$3"
 	;;
 	
   configure)
@@ -139,7 +174,14 @@ case "$1" in
 	fi
 	export_image $2
 	;;
-  *) echo $"Usage: $0 {start|configure|export}"
+  expose)
+    if [ $# -ne 3 ]; then
+		echo "Usage: $0 expose <host_port> <container_port>"
+		exit 1
+	fi
+	expose_port $2 $3
+	;;
+  *) echo $"Usage: $0 {start|configure|export|expose}"
      exit 1
 esac
 
