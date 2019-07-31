@@ -29,8 +29,7 @@ function prepare_image() {
 
 	echo Prepare fs based on $1
 	tar -xf $1 -C $FS_ROOT
-	
-	echo nameserver 8.8.8.8 > ${FS_ROOT}/etc/resolv.conf 
+	echo nameserver 8.8.8.8 > ${FS_ROOT}/etc/resolv.conf
 	echo container > ${FS_ROOT}/etc/hostname
 	echo 127.0.0.1        localhost > ${FS_ROOT}/etc/hosts
 	echo 10.1.0.1         container > ${FS_ROOT}/etc/hosts
@@ -43,8 +42,10 @@ function prepare_mount() {
 	[ -d $CON_MOUNT ] || mkdir -p $CON_MOUNT
 
 	mount --make-shared --bind $HOST_MOUNT $CON_MOUNT
-	
+
 	mount -t sysfs none ${FS_ROOT}/sys
+	# Unshare will do the actual mount later
+	mount -t tmpfs tmpfs ${FS_ROOT}/proc
 }
 
 function prepare_devices() {
@@ -67,6 +68,7 @@ function cleanup() {
 	# Remove mount point
 	umount $CON_MOUNT
 	umount ${FS_ROOT}/sys
+	umount ${FS_ROOT}/proc
 
 	# Remove iptable entries
 	iptables -S | sed "/handBuildContainer/s/-A/iptables -D/e" &> /dev/null
@@ -77,8 +79,8 @@ function start_container() {
 	prepare_container $1
 
 	echo CMD: $2
-	sh -c "echo $$; exec unshare --mount --uts --ipc --net --pid -f --user --map-root-user chroot $PWD/rootfs sh -c '/bin/mount -t proc none /proc && $2'"
-	
+	sh -c "echo $$; exec unshare --mount --uts --ipc --net --pid -f --user --map-root-user --mount-proc=${FS_ROOT}/proc chroot $PWD/rootfs $2"
+
 	cleanup
 }
 
@@ -113,7 +115,7 @@ function configure_network() {
 	/bin/echo 1 > /proc/sys/net/ipv4/ip_forward
 
 	iptables -t nat -A POSTROUTING -o $CONTAINERIF -j MASQUERADE -m comment --comment "handBuildContainer"
-	iptables -A FORWARD -i $CONTAINERIF -o $HOSTIF -m state --state RELATED,ESTABLISHED -j ACCEPT -m comment --comment "handBuildContainer" 
+	iptables -A FORWARD -i $CONTAINERIF -o $HOSTIF -m state --state RELATED,ESTABLISHED -j ACCEPT -m comment --comment "handBuildContainer"
 	iptables -A FORWARD -i $HOSTIF -o $CONTAINERIF -j ACCEPT -m comment --comment "handBuildContainer"
 
 	iptables -t nat -A POSTROUTING -o $HOSTIF -j MASQUERADE -m comment --comment "handBuildContainer"
@@ -124,7 +126,7 @@ function configure_network() {
 function configure_container() {
 	NS=$(pgrep -P $1)
 	export NS
-	
+
 	create_virtual_network
 	configure_network
 }
@@ -142,15 +144,23 @@ function export_image() {
 ## Expose
 ###########################################################################################
 function expose_port() {
-	iptables -t nat -A PREROUTING ! -i con0 -p tcp --dport $1 -j DNAT --to-destination 10.1.0.1:$2 -m comment --comment handBuildContainer 
-	iptables -t nat -A POSTROUTING -s 10.1.0.1/32 -d 10.1.0.1/32 -p tcp --dport $2 -j MASQUERADE -m comment --comment handBuildContainer 
-	iptables -A FORWARD -d 10.1.0.1/32 ! -i con0 -o con0 -p tcp --dport $2 -j ACCEPT -m comment --comment handBuildContainer 
+	iptables -t nat -A PREROUTING ! -i con0 -p tcp --dport $1 -j DNAT --to-destination 10.1.0.1:$2 -m comment --comment handBuildContainer
+	iptables -t nat -A POSTROUTING -s 10.1.0.1/32 -d 10.1.0.1/32 -p tcp --dport $2 -j MASQUERADE -m comment --comment handBuildContainer
+	iptables -A FORWARD -d 10.1.0.1/32 ! -i con0 -o con0 -p tcp --dport $2 -j ACCEPT -m comment --comment handBuildContainer
+}
+
+###########################################################################################
+## Exec
+###########################################################################################
+function exec_container() {
+	NS=$(pgrep -P $(pgrep -P $1))
+	nsenter -m -u -i -n -p -t $NS chroot $FS_ROOT $2
 }
 
 ###########################################################################################
 ## Parse Arguments
 ###########################################################################################
-case "$1" in 
+case "$1" in
   start)
 	if [ $# -ne 3 ]; then
 		echo "Usage: $0 start <image file> <cmd>"
@@ -158,7 +168,7 @@ case "$1" in
 	fi
 	start_container $2 "$3"
 	;;
-	
+
   configure)
 	if [ $# -ne 2 ]; then
 		echo "Usage: $0 configure <parent pid>"
@@ -166,22 +176,29 @@ case "$1" in
 	fi
 	configure_container $2
 	;;
-  
+
   export)
-    if [ $# -ne 2 ]; then
+    	if [ $# -ne 2 ]; then
 		echo "Usage: $0 export <image name>"
 		exit 1
-	fi
-	export_image $2
+    	fi
+    	export_image $2
 	;;
   expose)
-    if [ $# -ne 3 ]; then
+    	if [ $# -ne 3 ]; then
 		echo "Usage: $0 expose <host_port> <container_port>"
 		exit 1
 	fi
 	expose_port $2 $3
 	;;
-  *) echo $"Usage: $0 {start|configure|export|expose}"
+  exec)
+    	if [ $# -ne 3 ]; then
+		echo "Usage: $0 enter <pid> <cmd>"
+        	exit 1
+    	fi
+    	exec_container $2 $3
+    	;;
+  *) echo $"Usage: $0 {start|configure|export|expose|exec}"
      exit 1
 esac
 
