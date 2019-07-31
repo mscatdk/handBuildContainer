@@ -10,9 +10,14 @@ fi
 FS_ROOT=$PWD/rootfs
 HOST_MOUNT=$PWD/data
 CON_MOUNT=$FS_ROOT/etc/demo
+LOG_FILE=hbc.log
 
 HOSTIF='enp0s3'
 CONTAINERIF='con0'
+
+function info() {
+	echo $1 > hbc.log
+}
 
 ###########################################################################################
 ## Start Container
@@ -65,21 +70,36 @@ function prepare_container() {
 }
 
 function cleanup() {
+	# Remove PID file
+	rm pid
+
 	# Remove mount point
-	umount $CON_MOUNT
-	umount ${FS_ROOT}/sys
-	umount ${FS_ROOT}/proc
+	umount $CON_MOUNT >> $LOG_FILE 2>&1
+	umount ${FS_ROOT}/sys >> $LOG_FILE 2>&1
+	umount ${FS_ROOT}/proc >> $LOG_FILE 2>&1
 
 	# Remove iptable entries
 	iptables -S | sed "/handBuildContainer/s/-A/iptables -D/e" &> /dev/null
 	iptables -t nat -S | sed "/handBuildContainer/s/-A/iptables -t nat -D/e" &> /dev/null
 }
 
+function wait_for() {
+	while [ 1 -ne $(ps -ef | grep `cat pid` | grep unshare | awk '{print $2}' | wc -l) ]
+	do
+		sleep 0.001
+	done
+	pid=$(ps -ef | grep `cat pid` | grep unshare | awk '{print $2}')
+	echo $(pgrep -P $pid) > pid
+	configure_container $pid
+}
+
 function start_container() {
+	cleanup
 	prepare_container $1
 
 	echo CMD: $2
-	sh -c "echo $$; exec unshare --mount --uts --ipc --net --pid -f --user --map-root-user --mount-proc=${FS_ROOT}/proc chroot $PWD/rootfs $2"
+	wait_for &
+	sh -c "echo $$ > pid; exec unshare --mount --uts --ipc --net --pid -f --user --map-root-user --mount-proc=${FS_ROOT}/proc chroot $PWD/rootfs $2"
 
 	cleanup
 }
@@ -124,7 +144,7 @@ function configure_network() {
 }
 
 function configure_container() {
-	NS=$(pgrep -P $1)
+	NS=$1
 	export NS
 
 	create_virtual_network
@@ -153,8 +173,7 @@ function expose_port() {
 ## Exec
 ###########################################################################################
 function exec_container() {
-	NS=$(pgrep -P $(pgrep -P $1))
-	nsenter -m -u -i -n -p -t $NS chroot $FS_ROOT $2
+	nsenter -m -u -i -n -p -t $1 chroot $FS_ROOT $2
 }
 
 ###########################################################################################
@@ -167,14 +186,6 @@ case "$1" in
 		exit 1
 	fi
 	start_container $2 "$3"
-	;;
-
-  configure)
-	if [ $# -ne 2 ]; then
-		echo "Usage: $0 configure <parent pid>"
-		exit 1
-	fi
-	configure_container $2
 	;;
 
   export)
@@ -198,7 +209,7 @@ case "$1" in
     	fi
     	exec_container $2 $3
     	;;
-  *) echo $"Usage: $0 {start|configure|export|expose|exec}"
+  *) echo $"Usage: $0 {start|export|expose|exec}"
      exit 1
 esac
 
