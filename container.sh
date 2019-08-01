@@ -12,7 +12,7 @@ HOST_MOUNT=$PWD/data
 CON_MOUNT=$FS_ROOT/etc/demo
 LOG_FILE=hbc.log
 
-HOSTIF='enp0s3'
+HOSTIF=$(ip route show | grep default | awk '{print $5}')
 CONTAINERIF='con0'
 
 function info() {
