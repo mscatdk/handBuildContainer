@@ -37,8 +37,8 @@ function prepare_image() {
 	echo nameserver 8.8.8.8 > ${FS_ROOT}/etc/resolv.conf
 	echo container > ${FS_ROOT}/etc/hostname
 	echo 127.0.0.1        localhost > ${FS_ROOT}/etc/hosts
-	echo 10.1.0.1         container > ${FS_ROOT}/etc/hosts
-	echo 10.1.0.1         docker > ${FS_ROOT}/etc/hosts
+	echo 10.1.0.1         container >> ${FS_ROOT}/etc/hosts
+	echo 10.1.0.1         docker >> ${FS_ROOT}/etc/hosts
 }
 
 function prepare_mount() {
