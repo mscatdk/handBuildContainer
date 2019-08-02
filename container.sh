@@ -71,7 +71,8 @@ function prepare_container() {
 
 function cleanup() {
 	# Remove PID file
-	rm pid
+	[ -f pid ] && rm pid
+	[ -f container.log ] && rm container.log
 
 	# Remove mount point
 	umount $CON_MOUNT >> $LOG_FILE 2>&1
@@ -99,7 +100,7 @@ function start_container() {
 
 	echo CMD: $2
 	wait_for &
-	sh -c "echo $$ > pid; exec unshare --mount --uts --ipc --net --pid -f --user --map-root-user --mount-proc=${FS_ROOT}/proc chroot $PWD/rootfs $2"
+	sh -c "echo $$ > pid; exec unshare --mount --uts --ipc --net --pid -f --user --mount-proc=${FS_ROOT}/proc ./bootstrap.sh $FS_ROOT $2"
 
 	cleanup
 }
@@ -147,8 +148,13 @@ function configure_container() {
 	NS=$1
 	export NS
 
+	echo "         0          0 4294967295" > /proc/${NS}/uid_map
+	echo "         0          0 4294967295" > /proc/${NS}/gid_map
+
 	create_virtual_network
 	configure_network
+
+	touch container.log
 }
 
 ###########################################################################################
