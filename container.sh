@@ -100,7 +100,7 @@ function start_container() {
 
 	echo CMD: $2
 	wait_for &
-	sh -c "echo $$ > pid; exec unshare --mount --uts --ipc --net --pid -f --user --mount-proc=${FS_ROOT}/proc ./bootstrap.sh $FS_ROOT $2"
+	sh -i -c "echo $$ > pid; exec unshare --mount --uts --ipc --net --pid -f --user --mount-proc=${FS_ROOT}/proc ./bootstrap.sh $FS_ROOT $2"
 
 	cleanup
 }
@@ -179,7 +179,7 @@ function expose_port() {
 ## Exec
 ###########################################################################################
 function exec_container() {
-	nsenter -m -u -i -n -p -t $1 chroot $FS_ROOT $2
+	nsenter -m -u -i -n -p -t $1 chroot $FS_ROOT "$2"
 }
 
 ###########################################################################################

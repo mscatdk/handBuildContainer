@@ -11,5 +11,4 @@ function wait_for_file() {
 echo -ne waiting
 wait_for_file container.log
 echo .
-exec chroot $1 $2
-
+exec chroot $1 "${@:2}"
