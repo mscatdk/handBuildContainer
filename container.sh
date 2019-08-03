@@ -118,9 +118,7 @@ function create_virtual_network() {
 
 	ln -s /proc/$NS/ns/net /var/run/netns/$NS
 
-	ip link add con0 type veth peer name eth0
-
-	ip link set eth0 netns $NS
+	ip link add con0 type veth peer name eth0 netns $NS
 
 	ip addr add 10.1.0.10/24 dev con0
 	ip netns exec $NS ip addr add 10.1.0.1/24 dev eth0
