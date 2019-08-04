@@ -7,16 +7,49 @@ if [ "$EUID" -ne 0 ]
 	exit
 fi
 
-FS_ROOT=$PWD/rootfs
-HOST_MOUNT=$PWD/data
-CON_MOUNT=$FS_ROOT/etc/demo
-LOG_FILE=hbc.log
+BASE_PATH=/var/lib/hbc
+CONTAINER_HOME=${BASE_PATH}/containers
+APP_HOME=${BASE_PATH}/bin
+LOG_FILE=${BASE_PATH}/hbc.log
 
 HOSTIF=$(ip route show | grep default | awk '{print $5}')
 CONTAINERIF='con0'
 
+function generate_id() {
+	< /dev/urandom tr -dc A-Za-z0-9 | head -c${1:-32};echo;
+}
+
+function create_directory_strcuture() {
+	[ ! -d $CONTAINER_HOME ] && mkdir -p $CONTAINER_HOME
+	[ ! -d $APP_HOME ] && mkdir -p $APP_HOME
+	[ ! -d ${BASE_PATH}/data ] && mkdir -p ${BASE_PATH}/data
+	
+	[ -f ./bootstrap.sh ] && cp ./bootstrap.sh ${APP_HOME}/bootstrap.sh
+}
+
+function create_containter_directories() {
+	[ -d ${CONTAINER_HOME}/$1 ] && rm -rf ${CONTAINER_HOME}/$1
+	mkdir -p ${CONTAINER_HOME}/$1/rootfs
+	mkdir -p ${CONTAINER_HOME}/$1/.locks
+	mkdir -p ${CONTAINER_HOME}/$1/config
+}
+
+function set_container_paths() {
+	export FS_ROOT=${CONTAINER_HOME}/$1/rootfs
+	export HOST_MOUNT=${BASE_PATH}/data
+	export CON_MOUNT=$FS_ROOT/etc/demo
+	
+	export CONFIG_COMPLETED_LOCK_FILE=${CONTAINER_HOME}/$1/.locks/config_completed.lock
+	export INITIAL_PID_FILE=${CONTAINER_HOME}/$1/.locks/initial_pid.lock
+	export PROCESS_PID_FILE=${CONTAINER_HOME}/$1/config/process_pid
+	export UNSHARE_PID_FILE=${CONTAINER_HOME}/$1/config/unshare_pid
+	
+	export IMAGE_NAME_FILE=${CONTAINER_HOME}/$1/config/image_name
+	export CMD_FILE=${CONTAINER_HOME}/$1/config/cmd
+}
+
 function info() {
-	echo $1 > hbc.log
+	echo $1 > $LOG_FILE
 }
 
 ###########################################################################################
@@ -70,10 +103,6 @@ function prepare_container() {
 }
 
 function cleanup() {
-	# Remove PID file
-	[ -f pid ] && rm pid
-	[ -f container.log ] && rm container.log
-
 	# Remove mount point
 	umount $CON_MOUNT >> $LOG_FILE 2>&1
 	umount ${FS_ROOT}/sys >> $LOG_FILE 2>&1
@@ -84,25 +113,60 @@ function cleanup() {
 	iptables -t nat -S | sed "/handBuildContainer/s/-A/iptables -t nat -D/e" &> /dev/null
 }
 
-function wait_for() {
-	while [ 1 -ne $(ps -ef | grep `cat pid` | grep unshare | awk '{print $2}' | wc -l) ]
+function wait_for_unshare_process() {
+	while [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
 	do
 		sleep 0.001
 	done
-	pid=$(ps -ef | grep `cat pid` | grep unshare | awk '{print $2}')
-	echo $(pgrep -P $pid) > pid
-	configure_container $pid
+	UNSHARE_PID=$(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}')
+	echo $UNSHARE_PID > $UNSHARE_PID_FILE
+	echo $(pgrep -P $UNSHARE_PID) > $PROCESS_PID_FILE
+	configure_container $UNSHARE_PID
 }
 
 function start_container() {
-	cleanup
-	prepare_container $1
+	export CONTAINER_ID=$(generate_id)
+	IMAGE_NAME=$1
+	CMD=$2
+	
+	create_containter_directories $CONTAINER_ID
+	set_container_paths $CONTAINER_ID
+	echo $CMD > $CMD_FILE
+	echo $IMAGE_NAME > $IMAGE_NAME_FILE 
+	
+	prepare_container $IMAGE_NAME
 
-	echo CMD: $2
-	wait_for &
-	sh -i -c "echo $$ > pid; exec unshare --mount --uts --ipc --net --pid -f --user --mount-proc=${FS_ROOT}/proc ./bootstrap.sh $FS_ROOT $2"
+	echo CMD: $CMD
+	echo Container ID: $CONTAINER_ID
+	wait_for_unshare_process &
+	sh -i -c "echo $$ > $INITIAL_PID_FILE; exec unshare --mount --uts --ipc --net --pid -f --user --mount-proc=${FS_ROOT}/proc ${APP_HOME}/bootstrap.sh $CONFIG_COMPLETED_LOCK_FILE $FS_ROOT $2"
 
 	cleanup
+}
+
+###########################################################################################
+## Stop Container
+###########################################################################################
+function stop_container() {
+	CONTAINER_ID=$1
+	if [ -d ${CONTAINER_HOME}/${CONTAINER_ID} ]
+	then
+		if is_active $CONTAINER_ID
+		then
+			set_container_paths $CONTAINER_ID
+			
+			# Kill the initial process first to get a clean shell exit
+			kill `cat $INITIAL_PID_FILE`
+			# Kill the unshare process and the parent process in the new PID Namespace
+			kill `cat $UNSHARE_PID_FILE`
+			kill -9 `cat $PROCESS_PID_FILE`
+			cleanup
+		else
+			echo Container isn\'t running
+		fi
+	else
+		echo Container with id: ${CONTAINER_ID} doesn\'t exist
+	fi
 }
 
 ###########################################################################################
@@ -142,17 +206,29 @@ function configure_network() {
 	iptables -A FORWARD -i $CONTAINERIF -o $HOSTIF -j ACCEPT -m comment --comment "handBuildContainer"
 }
 
-function configure_container() {
-	NS=$1
-	export NS
-
+function create_user_mapping() {
 	echo "         0          0 4294967295" > /proc/${NS}/uid_map
 	echo "         0          0 4294967295" > /proc/${NS}/gid_map
+}
 
+function configure_container() {
+	export NS=$1
+
+	create_user_mapping
 	create_virtual_network
 	configure_network
 
-	touch container.log
+	touch $CONFIG_COMPLETED_LOCK_FILE
+}
+
+function is_active() {
+	set_container_paths $1
+	if [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
+	then
+		false
+	else
+		true
+	fi
 }
 
 ###########################################################################################
@@ -177,12 +253,48 @@ function expose_port() {
 ## Exec
 ###########################################################################################
 function exec_container() {
-	nsenter -m -u -i -n -p -t $1 chroot $FS_ROOT "$2"
+	set_container_paths $1
+	nsenter -m -u -i -n -p -t `cat $PROCESS_PID_FILE` chroot $FS_ROOT "$2"
+}
+
+###########################################################################################
+## ps
+###########################################################################################
+function list_active_containers() {
+	printf '%32s %10s %25s %50s\n' "CONTAINER ID" "PID" "IMAGE" "CMD"
+	for d in $CONTAINER_HOME/*/
+	do 
+		CONTAINER_ID=$(basename $d)
+		if is_active $CONTAINER_ID
+		then
+			set_container_paths $CONTAINER_ID
+			printf '%32s %10s %25s %50s\n' $CONTAINER_ID `cat $PROCESS_PID_FILE` `cat $IMAGE_NAME_FILE` `cat $CMD_FILE`
+		fi
+	done
+}
+
+###########################################################################################
+## clean
+###########################################################################################
+function delete_inactive_containers() {
+	for d in $CONTAINER_HOME/*/
+	do 
+		if [ -d $d ]
+		then
+			CONTAINER_ID=$(basename $d)
+			if ! is_active $CONTAINER_ID
+			then
+				echo Deleting $CONTAINER_ID
+				rm -rf ${CONTAINER_HOME}/${CONTAINER_ID}
+			fi
+		fi
+	done
 }
 
 ###########################################################################################
 ## Parse Arguments
 ###########################################################################################
+create_directory_strcuture
 case "$1" in
   start)
 	if [ $# -ne 3 ]; then
@@ -191,29 +303,46 @@ case "$1" in
 	fi
 	start_container $2 "$3"
 	;;
-
+  stop)
+    if [ $# -ne 2 ]; then
+		echo "Usage: $0 stop <container id>"
+		exit 1
+    fi
+    stop_container $2
+	;;
   export)
-    	if [ $# -ne 2 ]; then
+    if [ $# -ne 2 ]; then
 		echo "Usage: $0 export <image name>"
 		exit 1
-    	fi
-    	export_image $2
+    fi
+    export_image $2
 	;;
   expose)
-    	if [ $# -ne 3 ]; then
-		echo "Usage: $0 expose <host_port> <container_port>"
+    if [ $# -ne 3 ]; then
+		echo "Usage: $0 expose <host port> <container port>"
 		exit 1
 	fi
 	expose_port $2 $3
 	;;
   exec)
-    	if [ $# -ne 3 ]; then
-		echo "Usage: $0 enter <pid> <cmd>"
-        	exit 1
-    	fi
-    	exec_container $2 $3
-    	;;
-  *) echo $"Usage: $0 {start|export|expose|exec}"
+    if [ $# -ne 3 ]; then
+		echo "Usage: $0 exec <container id> <cmd>"
+        exit 1
+    fi
+    exec_container $2 $3
+    ;;
+  ps)
+	list_active_containers
+    ;;
+  clean)
+	delete_inactive_containers
+	;;
+  *) echo $"Usage: $0 {start|stop|exec|ps|clean|export}"
+	 echo "start -> start new container"
+	 echo "stop -> stop running container"
+	 echo "ps -> list running containers"
+	 echo "clean -> delete all inactive containers"
+	 echo "export -> Create image from docker image"
      exit 1
 esac
 
