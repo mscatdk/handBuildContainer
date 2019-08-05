@@ -138,7 +138,14 @@ function start_container() {
 
 	echo CMD: $CMD
 	echo Container ID: $CONTAINER_ID
+
+	# Create process that will complete the configuration once unshare has completed
 	wait_for_unshare_process &
+
+	# Enable user namespaces on Red Hat and CentOS
+	[ -f /proc/sys/user/max_user_namespaces ] && [ 0 -eq `cat /proc/sys/user/max_user_namespaces` ] && echo 640 > /proc/sys/user/max_user_namespaces
+
+	# Unshare -> Create namespaces and mount proc
 	sh -i -c "echo $$ > $INITIAL_PID_FILE; exec unshare --mount --uts --ipc --net --pid -f --user --mount-proc=${FS_ROOT}/proc ${APP_HOME}/bootstrap.sh $CONFIG_COMPLETED_LOCK_FILE $FS_ROOT $2"
 
 	cleanup
