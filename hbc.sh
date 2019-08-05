@@ -23,7 +23,7 @@ function create_directory_strcuture() {
 	[ ! -d $CONTAINER_HOME ] && mkdir -p $CONTAINER_HOME
 	[ ! -d $APP_HOME ] && mkdir -p $APP_HOME
 	[ ! -d ${BASE_PATH}/data ] && mkdir -p ${BASE_PATH}/data
-	
+
 	[ -f ./bootstrap.sh ] && cp ./bootstrap.sh ${APP_HOME}/bootstrap.sh
 }
 
@@ -38,12 +38,12 @@ function set_container_paths() {
 	export FS_ROOT=${CONTAINER_HOME}/$1/rootfs
 	export HOST_MOUNT=${BASE_PATH}/data
 	export CON_MOUNT=$FS_ROOT/etc/demo
-	
+
 	export CONFIG_COMPLETED_LOCK_FILE=${CONTAINER_HOME}/$1/.locks/config_completed.lock
 	export INITIAL_PID_FILE=${CONTAINER_HOME}/$1/.locks/initial_pid.lock
 	export PROCESS_PID_FILE=${CONTAINER_HOME}/$1/config/process_pid
 	export UNSHARE_PID_FILE=${CONTAINER_HOME}/$1/config/unshare_pid
-	
+
 	export IMAGE_NAME_FILE=${CONTAINER_HOME}/$1/config/image_name
 	export CMD_FILE=${CONTAINER_HOME}/$1/config/cmd
 }
@@ -128,12 +128,12 @@ function start_container() {
 	export CONTAINER_ID=$(generate_id)
 	IMAGE_NAME=$1
 	CMD=$2
-	
+
 	create_containter_directories $CONTAINER_ID
 	set_container_paths $CONTAINER_ID
 	echo $CMD > $CMD_FILE
-	echo $IMAGE_NAME > $IMAGE_NAME_FILE 
-	
+	echo $IMAGE_NAME > $IMAGE_NAME_FILE
+
 	prepare_container $IMAGE_NAME
 
 	echo CMD: $CMD
@@ -154,7 +154,7 @@ function stop_container() {
 		if is_active $CONTAINER_ID
 		then
 			set_container_paths $CONTAINER_ID
-			
+
 			# Kill the initial process first to get a clean shell exit
 			kill `cat $INITIAL_PID_FILE`
 			# Kill the unshare process and the parent process in the new PID Namespace
@@ -190,7 +190,7 @@ function create_virtual_network() {
 	ip netns exec $NS ip link set eth0 up
 	ip netns exec $NS ip link set lo up
 
-	ip netns exec $NS route add default gw 10.1.0.10 eth0
+	ip netns exec $NS ip route add default via 10.1.0.10
 }
 
 function configure_network() {
@@ -263,12 +263,15 @@ function exec_container() {
 function list_active_containers() {
 	printf '%32s %10s %25s %50s\n' "CONTAINER ID" "PID" "IMAGE" "CMD"
 	for d in $CONTAINER_HOME/*/
-	do 
-		CONTAINER_ID=$(basename $d)
-		if is_active $CONTAINER_ID
+	do
+		if [ -d $d ]
 		then
-			set_container_paths $CONTAINER_ID
-			printf '%32s %10s %25s %50s\n' $CONTAINER_ID `cat $PROCESS_PID_FILE` `cat $IMAGE_NAME_FILE` `cat $CMD_FILE`
+			CONTAINER_ID=$(basename $d)
+			if is_active $CONTAINER_ID
+			then
+				set_container_paths $CONTAINER_ID
+				printf '%32s %10s %25s %50s\n' $CONTAINER_ID `cat $PROCESS_PID_FILE` `cat $IMAGE_NAME_FILE` `cat $CMD_FILE`
+			fi
 		fi
 	done
 }
