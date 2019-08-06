@@ -66,11 +66,11 @@ function get_cpu_arch() {
 	if [ 1 -eq `echo $MACHINE_TYPE | grep -i x86_64 | wc -l` ]
 	then
 		echo "amd64"
-	elif  [ 1 -eq `echo $MACINE_TYPE | grep -i armv | wc -l` ]
+	elif [ 1 -eq `echo $MACHINE_TYPE | grep -i armv | wc -l` ]
 	then
 		echo "arm"
 	else
-		echo "Can\'t determine CPU architecture"
+		echo ""
 		exit 128
 	fi
 }
@@ -88,6 +88,11 @@ function locate_image() {
 		VERSION="latest"
 	fi
 	CPU_ARCH=$(get_cpu_arch)
+	if [ "$CPU_ARCH" = "" ]
+	then
+		echo "Can't determine CPU architecture"
+		exit 128
+	fi
 
 	RELATIVE_PATH=${NAME}/${CPU_ARCH}/${VERSION}/${NAME}-${CPU_ARCH}-${VERSION}.tar
 	if [ -f ${IMAGE_HOME}/${RELATIVE_PATH} ]
@@ -166,6 +171,7 @@ function cleanup() {
 }
 
 function wait_for_unshare_process() {
+	while [ ! -f $INITIAL_PID_FILE ]; do sleep 0.001; done
 	while [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
 	do
 		sleep 0.001
