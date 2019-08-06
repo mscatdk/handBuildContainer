@@ -8,6 +8,7 @@ function wait_for_file() {
         done
 }
 
+# Wait until configuration has been completed by waiting for the creation of /.locks/config_completed.lock
 echo -ne waiting
 wait_for_file $1
 echo .

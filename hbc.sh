@@ -16,6 +16,9 @@ LOG_FILE=${BASE_PATH}/hbc.log
 HOSTIF=$(ip route show | grep default | awk '{print $5}')
 CONTAINERIF='con0'
 
+###########################################################################################
+## Common
+###########################################################################################
 function generate_id() {
 	< /dev/urandom tr -dc A-Za-z0-9 | head -c${1:-32};echo;
 }
@@ -54,12 +57,33 @@ function set_container_paths() {
 	export CMD_FILE=${CONTAINER_HOME}/$1/config/cmd
 }
 
+function is_active() {
+	set_container_paths $1
+	if [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
+	then
+		false
+	else
+		true
+	fi
+}
+
+function cleanup() {
+	# Remove mount point
+	umount $CON_MOUNT >> $LOG_FILE 2>&1
+	umount ${FS_ROOT}/sys >> $LOG_FILE 2>&1
+	umount ${FS_ROOT}/proc >> $LOG_FILE 2>&1
+
+	# Remove iptable entries
+	iptables -S | sed "/handBuildContainer/s/-A/iptables -D/e" &> /dev/null
+	iptables -t nat -S | sed "/handBuildContainer/s/-A/iptables -t nat -D/e" &> /dev/null
+}
+
 function info() {
 	echo $1 > $LOG_FILE
 }
 
 ###########################################################################################
-## Start Container
+## Image Handling
 ###########################################################################################
 function get_cpu_arch() {
 	MACHINE_TYPE=$(uname -m)
@@ -125,16 +149,70 @@ function prepare_image() {
 	echo Prepare fs based on $IMAGE_PATH
 	tar -xf $IMAGE_PATH -C $FS_ROOT
 	echo nameserver 8.8.8.8 > ${FS_ROOT}/etc/resolv.conf
-	echo container > ${FS_ROOT}/etc/hostname
+	echo hbc > ${FS_ROOT}/etc/hostname
 	echo 127.0.0.1        localhost > ${FS_ROOT}/etc/hosts
-	echo 10.1.0.1         container >> ${FS_ROOT}/etc/hosts
+	echo 10.1.0.1         hbc >> ${FS_ROOT}/etc/hosts
 	echo 10.1.0.1         docker >> ${FS_ROOT}/etc/hosts
 }
 
+###########################################################################################
+## Configure Container Namespaces
+###########################################################################################
+function create_virtual_network() {
+	mkdir_if_not_exists /var/run/netns
+	
+	if [ -f /var/run/netns/$NS ]; then
+		rm -rf /var/run/netns/$NS
+	fi
+
+	ln -s /proc/$NS/ns/net /var/run/netns/$NS
+
+	ip link add con0 type veth peer name eth0 netns $NS
+
+	ip addr add 10.1.0.10/24 dev con0
+	ip netns exec $NS ip addr add 10.1.0.1/24 dev eth0
+	ip link set con0 up
+	ip netns exec $NS ip link set eth0 up
+	ip netns exec $NS ip link set lo up
+
+	ip netns exec $NS ip route add default via 10.1.0.10
+}
+
+function configure_network() {
+	# Package forwarding
+	/bin/echo 1 > /proc/sys/net/ipv4/ip_forward
+
+	iptables -t nat -A POSTROUTING -o $CONTAINERIF -j MASQUERADE -m comment --comment "handBuildContainer"
+	iptables -A FORWARD -i $CONTAINERIF -o $HOSTIF -m state --state RELATED,ESTABLISHED -j ACCEPT -m comment --comment "handBuildContainer"
+	iptables -A FORWARD -i $HOSTIF -o $CONTAINERIF -j ACCEPT -m comment --comment "handBuildContainer"
+
+	iptables -t nat -A POSTROUTING -o $HOSTIF -j MASQUERADE -m comment --comment "handBuildContainer"
+	iptables -A FORWARD -i $HOSTIF -o $CONTAINERIF -m state --state RELATED,ESTABLISHED -j ACCEPT -m comment --comment "handBuildContainer"
+	iptables -A FORWARD -i $CONTAINERIF -o $HOSTIF -j ACCEPT -m comment --comment "handBuildContainer"
+}
+
+function create_user_mapping() {
+	echo "         0          0 4294967295" > /proc/${NS}/uid_map
+	echo "         0          0 4294967295" > /proc/${NS}/gid_map
+}
+
+function configure_container() {
+	export NS=$1
+
+	create_user_mapping
+	create_virtual_network
+	configure_network
+
+	touch $CONFIG_COMPLETED_LOCK_FILE
+}
+
+###########################################################################################
+## Start Container
+###########################################################################################
 function prepare_mount() {
 	# Create mount point
-	[ -d $HOST_MOUNT ] || mkdir -p $HOST_MOUNT
-	[ -d $CON_MOUNT ] || mkdir -p $CON_MOUNT
+	mkdir_if_not_exists $HOST_MOUNT
+	mkdir_if_not_exists $CON_MOUNT
 
 	mount --make-shared --bind $HOST_MOUNT $CON_MOUNT
 
@@ -157,17 +235,6 @@ function prepare_container() {
 	prepare_image $1
 	prepare_mount
 	prepare_devices
-}
-
-function cleanup() {
-	# Remove mount point
-	umount $CON_MOUNT >> $LOG_FILE 2>&1
-	umount ${FS_ROOT}/sys >> $LOG_FILE 2>&1
-	umount ${FS_ROOT}/proc >> $LOG_FILE 2>&1
-
-	# Remove iptable entries
-	iptables -S | sed "/handBuildContainer/s/-A/iptables -D/e" &> /dev/null
-	iptables -t nat -S | sed "/handBuildContainer/s/-A/iptables -t nat -D/e" &> /dev/null
 }
 
 function wait_for_unshare_process() {
@@ -231,68 +298,6 @@ function stop_container() {
 		fi
 	else
 		echo Container with id: ${CONTAINER_ID} doesn\'t exist
-	fi
-}
-
-###########################################################################################
-## Configure Container
-###########################################################################################
-function create_virtual_network() {
-	if [ ! -d /var/run/netns ]; then
-		mkdir /var/run/netns
-	fi
-	if [ -f /var/run/netns/$NS ]; then
-		rm -rf /var/run/netns/$NS
-	fi
-
-	ln -s /proc/$NS/ns/net /var/run/netns/$NS
-
-	ip link add con0 type veth peer name eth0 netns $NS
-
-	ip addr add 10.1.0.10/24 dev con0
-	ip netns exec $NS ip addr add 10.1.0.1/24 dev eth0
-	ip link set con0 up
-	ip netns exec $NS ip link set eth0 up
-	ip netns exec $NS ip link set lo up
-
-	ip netns exec $NS ip route add default via 10.1.0.10
-}
-
-function configure_network() {
-	# Package forwarding
-	/bin/echo 1 > /proc/sys/net/ipv4/ip_forward
-
-	iptables -t nat -A POSTROUTING -o $CONTAINERIF -j MASQUERADE -m comment --comment "handBuildContainer"
-	iptables -A FORWARD -i $CONTAINERIF -o $HOSTIF -m state --state RELATED,ESTABLISHED -j ACCEPT -m comment --comment "handBuildContainer"
-	iptables -A FORWARD -i $HOSTIF -o $CONTAINERIF -j ACCEPT -m comment --comment "handBuildContainer"
-
-	iptables -t nat -A POSTROUTING -o $HOSTIF -j MASQUERADE -m comment --comment "handBuildContainer"
-	iptables -A FORWARD -i $HOSTIF -o $CONTAINERIF -m state --state RELATED,ESTABLISHED -j ACCEPT -m comment --comment "handBuildContainer"
-	iptables -A FORWARD -i $CONTAINERIF -o $HOSTIF -j ACCEPT -m comment --comment "handBuildContainer"
-}
-
-function create_user_mapping() {
-	echo "         0          0 4294967295" > /proc/${NS}/uid_map
-	echo "         0          0 4294967295" > /proc/${NS}/gid_map
-}
-
-function configure_container() {
-	export NS=$1
-
-	create_user_mapping
-	create_virtual_network
-	configure_network
-
-	touch $CONFIG_COMPLETED_LOCK_FILE
-}
-
-function is_active() {
-	set_container_paths $1
-	if [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
-	then
-		false
-	else
-		true
 	fi
 }
 
