@@ -2,6 +2,16 @@
 
 The purpose of this repository is to implement containers using generally available Linux commands. The current implementation support some of the most common features e.g. post forwarding. However, you can currently only run one container at a time and port forwarding doesn't work in case the iptable entries created by e.g. Docker are present.
 
+## Images
+
+The following images are currently available
+
+| Name | CMD | arm | amd64 |
+|---|---|---|---|
+|Alpine|./hbc.sh start alpine /bin/sh|x|x|
+|Nginx |./hbc.sh start nginx "nginx -g 'daemon off;'"| |x|
+|Apache httpd|./hbc.sh start httpd "/usr/local/apache2/bin/httpd -DFOREGROUND"| |x|
+
 ## User Guide
 
 The repository contain the alpine image for both arm and amd64. Hence, let's start by lunching the alpine container with the command "/bin/sh"
