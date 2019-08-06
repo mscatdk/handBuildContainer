@@ -71,6 +71,7 @@ function get_cpu_arch() {
 		echo "arm"
 	else
 		echo "Can\'t determine CPU architecture"
+		exit 128
 	fi
 }
 
