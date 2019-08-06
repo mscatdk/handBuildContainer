@@ -9,6 +9,7 @@ fi
 
 BASE_PATH=/var/lib/hbc
 CONTAINER_HOME=${BASE_PATH}/containers
+IMAGE_HOME=${BASE_PATH}/images
 APP_HOME=${BASE_PATH}/bin
 LOG_FILE=${BASE_PATH}/hbc.log
 
@@ -19,10 +20,15 @@ function generate_id() {
 	< /dev/urandom tr -dc A-Za-z0-9 | head -c${1:-32};echo;
 }
 
+function mkdir_if_not_exists() {
+        [ ! -d $1 ] && mkdir -p $1
+}
+
 function create_directory_strcuture() {
-	[ ! -d $CONTAINER_HOME ] && mkdir -p $CONTAINER_HOME
-	[ ! -d $APP_HOME ] && mkdir -p $APP_HOME
-	[ ! -d ${BASE_PATH}/data ] && mkdir -p ${BASE_PATH}/data
+	mkdir_if_not_exists $CONTAINER_HOME
+	mkdir_if_not_exists $APP_HOME
+	mkdir_if_not_exists ${BASE_PATH}/data
+	mkdir_if_not_exists $IMAGE_HOME
 
 	[ -f ./bootstrap.sh ] && cp ./bootstrap.sh ${APP_HOME}/bootstrap.sh
 }
@@ -55,18 +61,63 @@ function info() {
 ###########################################################################################
 ## Start Container
 ###########################################################################################
-function prepare_image() {
-	if [ ! -f "$1" ]; then
-		echo "Can't find image $1"
-		exit 128
+function get_cpu_arch() {
+	MACHINE_TYPE=$(uname -m)
+	if [ 1 -eq `echo $MACHINE_TYPE | grep -i x86_64 | wc -l` ]
+	then
+		echo "amd64"
+	elif  [ 1 -eq `echo $MACINE_TYPE | grep -i armv | wc -l` ]
+	then
+		echo "arm"
+	else
+		echo "Can\'t determine CPU architecture"
 	fi
+}
+
+function locate_image() {
+	if [ -f "$1" ]; then
+		export IMAGE_PATH=$1
+		return
+	fi
+
+	NAME=$(cut -d':' -f1 <<<$1)
+	VERSION=$(cut -d':' -f2 <<<$1)
+	if [ $NAME == $VERSION ]
+	then
+		VERSION="latest"
+	fi
+	CPU_ARCH=$(get_cpu_arch)
+
+	RELATIVE_PATH=${NAME}/${CPU_ARCH}/${VERSION}/${NAME}-${CPU_ARCH}-${VERSION}.tar
+	if [ -f ${IMAGE_HOME}/${RELATIVE_PATH} ]
+	then
+		export IMAGE_PATH=${IMAGE_HOME}/${RELATIVE_PATH}
+		return
+	fi
+
+	mkdir -p $(dirname ${IMAGE_HOME}/${RELATIVE_PATH})
+	curl --fail https://msc.webhop.me/hbc/images/$RELATIVE_PATH -o ${IMAGE_HOME}/${RELATIVE_PATH}
+	rc=$?
+	if [ $rc -eq 0 ]
+	then
+		export IMAGE_PATH=${IMAGE_HOME}/${RELATIVE_PATH}
+		return
+	else
+		echo "Can't find image remote!"
+		exit 12
+	fi
+}
+
+function prepare_image() {
+	# The below function will set IMAGE_PATH
+	locate_image $1
 
 	# Create/recreate filesystem
 	rm -rf $FS_ROOT
 	mkdir $FS_ROOT
 
-	echo Prepare fs based on $1
-	tar -xf $1 -C $FS_ROOT
+	echo Prepare fs based on $IMAGE_PATH
+	tar -xf $IMAGE_PATH -C $FS_ROOT
 	echo nameserver 8.8.8.8 > ${FS_ROOT}/etc/resolv.conf
 	echo container > ${FS_ROOT}/etc/hostname
 	echo 127.0.0.1        localhost > ${FS_ROOT}/etc/hosts
