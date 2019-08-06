@@ -6,7 +6,7 @@ The purpose of this repository is to implement containers using generally availa
 
 The following images are currently available
 
-| Name | CMD | arm | amd64 |
+| Name | Command Example | arm | amd64 |
 |---|---|---|---|
 |Alpine|./hbc.sh start alpine /bin/sh|x|x|
 |Nginx |./hbc.sh start nginx "nginx -g 'daemon off;'"| |x|
