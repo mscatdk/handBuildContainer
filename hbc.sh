@@ -59,7 +59,10 @@ function set_container_paths() {
 
 function is_active() {
 	set_container_paths $1
-	if [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
+	if [ ! -f $INITIAL_PID_FILE ]
+	then
+		false
+	elif [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
 	then
 		false
 	else
@@ -67,11 +70,15 @@ function is_active() {
 	fi
 }
 
+function clean_mounts() {
+        # Remove mount point
+        umount $CON_MOUNT >> $LOG_FILE 2>&1
+        umount ${FS_ROOT}/sys >> $LOG_FILE 2>&1
+        umount ${FS_ROOT}/proc >> $LOG_FILE 2>&1
+}
+
 function cleanup() {
-	# Remove mount point
-	umount $CON_MOUNT >> $LOG_FILE 2>&1
-	umount ${FS_ROOT}/sys >> $LOG_FILE 2>&1
-	umount ${FS_ROOT}/proc >> $LOG_FILE 2>&1
+	clean_mounts
 
 	# Remove iptable entries
 	iptables -S | sed "/handBuildContainer/s/-A/iptables -D/e" &> /dev/null
@@ -160,7 +167,7 @@ function prepare_image() {
 ###########################################################################################
 function create_virtual_network() {
 	mkdir_if_not_exists /var/run/netns
-	
+
 	if [ -f /var/run/netns/$NS ]; then
 		rm -rf /var/run/netns/$NS
 	fi
@@ -356,13 +363,14 @@ function list_active_containers() {
 ###########################################################################################
 function delete_inactive_containers() {
 	for d in $CONTAINER_HOME/*/
-	do 
+	do
 		if [ -d $d ]
 		then
 			CONTAINER_ID=$(basename $d)
 			if ! is_active $CONTAINER_ID
 			then
 				echo Deleting $CONTAINER_ID
+				clean_mounts
 				rm -rf ${CONTAINER_HOME}/${CONTAINER_ID}
 			fi
 		fi

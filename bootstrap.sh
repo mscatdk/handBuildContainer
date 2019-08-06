@@ -12,4 +12,9 @@ function wait_for_file() {
 echo -ne waiting
 wait_for_file $1
 echo .
+
+# Set hostname
+chroot $2 /bin/hostname hbc
+
+# Execute cmd
 exec chroot $2 "${@:3}"
