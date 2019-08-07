@@ -412,7 +412,7 @@ function install_app() {
 	[ -f /usr/bin/hbc ] && rm /usr/bin/hbc
 	ln -s ${APP_HOME}/hbc.sh /usr/bin/hbc
 
-	echo "Installation of version $VERSION has completed"
+	echo "Installation of $VERSION has completed"
 }
 
 ###########################################################################################
