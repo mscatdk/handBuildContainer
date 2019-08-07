@@ -86,7 +86,11 @@ function cleanup() {
 }
 
 function info() {
-	echo $1 > $LOG_FILE
+	echo "[`date`] INFO $1" >> $LOG_FILE
+}
+
+function error() {
+	echo "[`date`] ERROR $1" >> $LOG_FILE
 }
 
 ###########################################################################################
@@ -266,6 +270,7 @@ function start_container() {
 	echo $CMD > $CMD_FILE
 	echo $IMAGE_NAME > $IMAGE_NAME_FILE
 
+	info "Starting CMD: $CMD Container ID: $CONTAINER_ID Image: $IMAGE_NAME"
 	prepare_container $IMAGE_NAME
 
 	echo CMD: $CMD
@@ -378,6 +383,39 @@ function delete_inactive_containers() {
 }
 
 ###########################################################################################
+## Installation
+###########################################################################################
+function download_file() {
+	curl -s --fail $1 -o $2
+	RC=$?
+	if [ $RC -ne 0 ]
+	then
+		echo "Unable to download app version $3"
+		exit 127
+	fi
+}
+
+function install_app() {
+	if [ -z $1 ]
+	then
+		VERSION=latest
+	else
+		VERSION=$1
+	fi
+
+	download_file "https://msc.webhop.me/hbc/app/${VERSION}/hbc.sh" "${APP_HOME}/hbc.sh" $VERSION
+	download_file "https://msc.webhop.me/hbc/app/${VERSION}/bootstrap.sh" "${APP_HOME}/bootstrap.sh" $VERSION
+
+	chmod 755 "${APP_HOME}/hbc.sh"
+	chmod 755 "${APP_HOME}/bootstrap.sh"
+
+	[ -f /usr/bin/hbc ] && rm /usr/bin/hbc
+	ln -s ${APP_HOME}/hbc.sh /usr/bin/hbc
+
+	echo "Installation of $VERSION has completed"
+}
+
+###########################################################################################
 ## Parse Arguments
 ###########################################################################################
 create_directory_strcuture
@@ -422,6 +460,9 @@ case "$1" in
     ;;
   clean)
 	delete_inactive_containers
+	;;
+  install)
+	install_app $2
 	;;
   *) echo $"Usage: $0 {start|stop|exec|ps|clean|export}"
 	 echo "start -> start new container"
