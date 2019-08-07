@@ -56,9 +56,6 @@ sudo hbc expose 9999 8888
 # You can alternatively run the following command
 curl 10.1.0.1:8888  (Pres ctrl + c to exit)
 
-# exit the container
-exit
-
 # Stop the running container
 sudo hbc stop 4UkcTplBHob0OSWSPz00tYNuiMT7qmTR
 
