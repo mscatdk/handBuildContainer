@@ -400,16 +400,16 @@ function install_app() {
 	then
 		VERSION=latest
 	else
-		VERSION=$1		
+		VERSION=$1
 	fi
 
 	download_file "https://msc.webhop.me/hbc/app/${VERSION}/hbc.sh" "${APP_HOME}/hbc.sh" $VERSION
 	download_file "https://msc.webhop.me/hbc/app/${VERSION}/bootstrap.sh" "${APP_HOME}/bootstrap.sh" $VERSION
-	
+
 	chmod 755 "${APP_HOME}/hbc.sh"
 	chmod 755 "${APP_HOME}/bootstrap.sh"
-	
-	rm /usr/bin/hbc
+
+	[ -f /usr/bin/hbc ] && rm /usr/bin/hbc
 	ln -s ${APP_HOME}/hbc.sh /usr/bin/hbc
 }
 
