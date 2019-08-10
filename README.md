@@ -1,6 +1,12 @@
 # Hand Build Container (hbc)
 
-The purpose of this repository is to implement containers using generally available Linux commands. The current implementation support some of the most common features e.g. post forwarding. However, you can currently only run one container at a time and port forwarding doesn't work in case the iptable entries created by e.g. Docker are present.
+The purpose of this repository is to implement containers using generally available Linux commands. The current implementation support some of the most common features e.g. entering a running container. However, the following limitations exists:
+
+* Only one container can run at a time (Hardcoded IPs).
+
+* Containers can only be run in interactive mode.
+
+* Port forwarding doesn't work when Docker iptable entries are present.
 
 ## Images
 
@@ -8,16 +14,30 @@ The following images are currently available
 
 | Name | Command Example | arm | amd64 |
 |---|---|---|---|
-|Alpine|./hbc.sh start alpine /bin/sh|x|x|
-|Nginx |./hbc.sh start nginx "nginx -g 'daemon off;'"| |x|
-|Apache httpd|./hbc.sh start httpd "/usr/local/apache2/bin/httpd -DFOREGROUND"| |x|
+|Alpine|hbc start alpine /bin/sh|x|x|
+|Nginx |hbc start nginx "nginx -g 'daemon off;'"| |x|
+|Apache httpd|hbc start httpd "/usr/local/apache2/bin/httpd -DFOREGROUND"| |x|
 
 ## Installation
+
 Run the following command to install the latest version
 
 ````bash
 curl -s https://raw.githubusercontent.com/mscatdk/handBuildContainer/master/hbc.sh | sudo bash -s install
 ````
+
+## Testing
+
+Tested on the following Linux distributions
+
+| OS Name | Versions | Comments |
+|---|---|---|
+| Red Hat (rhel) | 8.0 | |
+| CentOS | 7 |  |
+| Suse (sles) | 15.1 | |
+| Debian | 9 (stretch) | |
+| Ubuntu | 18.04.2 LTS | |
+| Raspbian | 9 (stretch) | |
 
 ## User Guide
 
