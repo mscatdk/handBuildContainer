@@ -55,18 +55,25 @@ function set_container_paths() {
 
 	export IMAGE_NAME_FILE=${CONTAINER_HOME}/$1/config/image_name
 	export CMD_FILE=${CONTAINER_HOME}/$1/config/cmd
+
+	export CGROUP_MEMORY_HOME=/sys/fs/cgroup/memory/$1
 }
 
 function is_active() {
-	set_container_paths $1
-	if [ ! -f $INITIAL_PID_FILE ]
+	if [ -d $CONTAINER_HOME/$1 ]
 	then
-		false
-	elif [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
-	then
-		false
+		set_container_paths $1
+		if [ ! -f $INITIAL_PID_FILE ]
+		then
+			false
+		elif [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
+		then
+			false
+		else
+			true
+		fi
 	else
-		true
+		false
 	fi
 }
 
@@ -75,6 +82,9 @@ function clean_mounts() {
         umount $CON_MOUNT >> $LOG_FILE 2>&1
         umount ${FS_ROOT}/sys >> $LOG_FILE 2>&1
         umount ${FS_ROOT}/proc >> $LOG_FILE 2>&1
+
+	# Remove memory cgroup
+	[ -d $CGROUP_MEMORY_HOME ] && rmdir $CGROUP_MEMORY_HOME
 }
 
 function cleanup() {
@@ -163,7 +173,6 @@ function prepare_image() {
 	echo hbc > ${FS_ROOT}/etc/hostname
 	echo 127.0.0.1        localhost > ${FS_ROOT}/etc/hosts
 	echo 10.1.0.1         hbc >> ${FS_ROOT}/etc/hosts
-	echo 10.1.0.1         docker >> ${FS_ROOT}/etc/hosts
 }
 
 ###########################################################################################
@@ -416,43 +425,62 @@ function install_app() {
 }
 
 ###########################################################################################
+## Memory CGROUP
+###########################################################################################
+function memory_cgroup() {
+	if is_active $1
+	then
+		set_container_paths $1
+
+		mkdir_if_not_exists $CGROUP_MEMORY_HOME
+		echo $2 > ${CGROUP_MEMORY_HOME}/memory.limit_in_bytes
+		cat $PROCESS_PID_FILE > ${CGROUP_MEMORY_HOME}/cgroup.procs
+		echo "The process will be killed in case more than $2 Bytes of memory is allocated"
+	else
+		echo "Container $1 is active or doesn't exist"
+	fi
+}
+
+function copy_into_container() {
+	if is_active $1
+	then
+		if [ -f $2 ]
+		then
+			cp $2 ${FS_ROOT}$3
+		elif [ -d $2 ]
+		then
+			cp -rf $2 ${FS_ROOT}$3
+		else
+			echo "Can't find $2"
+		fi
+	else
+		echo "Container is inactive or doesn't exist"
+	fi
+}
+
+###########################################################################################
 ## Parse Arguments
 ###########################################################################################
 create_directory_strcuture
 case "$1" in
   start)
-	if [ $# -ne 3 ]; then
-		echo "Usage: $0 start <image file> <cmd>"
-		exit 1
-	fi
+	if [ $# -ne 3 ]; then echo "Usage: $0 start <image file> <cmd>"; exit 1; fi
 	start_container $2 "$3"
 	;;
   stop)
-    if [ $# -ne 2 ]; then
-		echo "Usage: $0 stop <container id>"
-		exit 1
-    fi
+    if [ $# -ne 2 ]; then echo "Usage: $0 stop <container id>"; exit 1; fi
     stop_container $2
 	;;
   export)
-    if [ $# -ne 2 ]; then
-		echo "Usage: $0 export <image name>"
-		exit 1
-    fi
+    if [ $# -ne 2 ]; then echo "Usage: $0 export <image name>"; exit 1; fi
     export_image $2
 	;;
   expose)
-    if [ $# -ne 3 ]; then
-		echo "Usage: $0 expose <host port> <container port>"
-		exit 1
-	fi
+    if [ $# -ne 3 ]; then echo "Usage: $0 expose <container id> <host port> <container port>"; exit 1; fi
 	expose_port $2 $3
 	;;
   exec)
-    if [ $# -ne 3 ]; then
-		echo "Usage: $0 exec <container id> <cmd>"
-        exit 1
-    fi
+    if [ $# -ne 3 ]; then echo "Usage: $0 exec <container id> <cmd>"; exit 1; fi
     exec_container $2 $3
     ;;
   ps)
@@ -464,12 +492,24 @@ case "$1" in
   install)
 	install_app $2
 	;;
-  *) echo $"Usage: $0 {start|stop|exec|ps|clean|export}"
-	 echo "start -> start new container"
-	 echo "stop -> stop running container"
+  memory)
+        if [ $# -ne 3 ]; then echo "Usage: $0 memory <container id> <memory limit in bytes>"; exit 1; fi
+        memory_cgroup $2 $3
+	;;
+  cp)
+	if [ $# -ne 4 ]; then echo "Usage: $0 cp <container id> <host path> <container path>"; exit 1; fi
+	copy_into_container $2 $3 $4
+	;;
+  *) echo $"Usage: $0 {start|stop|ps|exec|expose|clean|export|memory|cp}"
+	 echo "start <image name> <cmd> -> start new container"
+	 echo "stop <container id> -> stop running container"
 	 echo "ps -> list running containers"
+	 echo "exec <container id> <cmd> -> Enter a running container"
+	 echo "expose <container id> <host port> <container port> -> Port forwading a host port to a container port"
 	 echo "clean -> delete all inactive containers"
-	 echo "export -> Create image from docker image"
+	 echo "export <image name> -> Create image from docker image"
+	 echo "memory <container id> <memory limit in bytes> -> Create cgroup memory constaint"
+	 echo "cp <container id> <host path> <container path> -> Copy file or directory into container"
      exit 1
 esac
 
