@@ -53,7 +53,7 @@ ifconfig
 nc -l -p 8888
 ````
 
-Let's assume the container receive the id 4UkcTplBHob0OSWSPz00tYNuiMT7qmTR. Let's open a new terminal and try the following:
+Let's assume the container receive the id 4UkcTplBHob0OSWSPz00tYNuiMT7qmTR (You will need to replace it below with our own container id). Let's open a new terminal and try the following:
 
 ````bash
 # List running containers
@@ -70,7 +70,7 @@ apk add tcpdump
 exit
 
 # Expose port 8888 as port 9999 on the host
-sudo hbc expose 9999 8888
+sudo hbc expose 4UkcTplBHob0OSWSPz00tYNuiMT7qmTR 9999 8888
 
 # Point your browser on a different computer to host:9999
 # You can alternatively run the following command
