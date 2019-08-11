@@ -441,38 +441,23 @@ function memory_cgroup() {
 create_directory_strcuture
 case "$1" in
   start)
-	if [ $# -ne 3 ]; then
-		echo "Usage: $0 start <image file> <cmd>"
-		exit 1
-	fi
+	if [ $# -ne 3 ]; then echo "Usage: $0 start <image file> <cmd>"; exit 1; fi
 	start_container $2 "$3"
 	;;
   stop)
-    if [ $# -ne 2 ]; then
-		echo "Usage: $0 stop <container id>"
-		exit 1
-    fi
+    if [ $# -ne 2 ]; then echo "Usage: $0 stop <container id>"; exit 1; fi
     stop_container $2
 	;;
   export)
-    if [ $# -ne 2 ]; then
-		echo "Usage: $0 export <image name>"
-		exit 1
-    fi
+    if [ $# -ne 2 ]; then echo "Usage: $0 export <image name>"; exit 1; fi
     export_image $2
 	;;
   expose)
-    if [ $# -ne 3 ]; then
-		echo "Usage: $0 expose <host port> <container port>"
-		exit 1
-	fi
+    if [ $# -ne 3 ]; then echo "Usage: $0 expose <container id> <host port> <container port>"; exit 1; fi
 	expose_port $2 $3
 	;;
   exec)
-    if [ $# -ne 3 ]; then
-		echo "Usage: $0 exec <container id> <cmd>"
-        exit 1
-    fi
+    if [ $# -ne 3 ]; then echo "Usage: $0 exec <container id> <cmd>"; exit 1; fi
     exec_container $2 $3
     ;;
   ps)
@@ -485,6 +470,7 @@ case "$1" in
 	install_app $2
 	;;
   memory)
+    if [ $# -ne 3 ]; then echo "Usage: $0 memory <container id> <memory limit in bytes>"; exit 1; fi  
 	memory_cgroup $2 $3
 	;;
   *) echo $"Usage: $0 {start|stop|ps|exec|expose|clean|export|memory}"
