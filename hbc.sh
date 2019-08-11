@@ -55,6 +55,8 @@ function set_container_paths() {
 
 	export IMAGE_NAME_FILE=${CONTAINER_HOME}/$1/config/image_name
 	export CMD_FILE=${CONTAINER_HOME}/$1/config/cmd
+
+	export CGROUP_MEMORY_HOME=/sys/fs/cgroup/memory/$1
 }
 
 function is_active() {
@@ -80,6 +82,9 @@ function clean_mounts() {
         umount $CON_MOUNT >> $LOG_FILE 2>&1
         umount ${FS_ROOT}/sys >> $LOG_FILE 2>&1
         umount ${FS_ROOT}/proc >> $LOG_FILE 2>&1
+
+	# Remove memory cgroup
+	[ -d $CGROUP_MEMORY_HOME ] && rmdir $CGROUP_MEMORY_HOME
 }
 
 function cleanup() {
@@ -168,7 +173,6 @@ function prepare_image() {
 	echo hbc > ${FS_ROOT}/etc/hostname
 	echo 127.0.0.1        localhost > ${FS_ROOT}/etc/hosts
 	echo 10.1.0.1         hbc >> ${FS_ROOT}/etc/hosts
-	echo 10.1.0.1         docker >> ${FS_ROOT}/etc/hosts
 }
 
 ###########################################################################################
@@ -420,18 +424,37 @@ function install_app() {
 	echo "Installation of $VERSION has completed"
 }
 
-##
+###########################################################################################
+## Memory CGROUP
+###########################################################################################
 function memory_cgroup() {
 	if is_active $1
 	then
 		set_container_paths $1
 
-		mkdir_if_not_exists /sys/fs/cgroup/memory/$1
-		echo $2 > /sys/fs/cgroup/memory/$1/memory.limit_in_bytes
-		cat $INITIAL_PID_FILE > /sys/fs/cgroup/memory/$1/cgroup.procs
+		mkdir_if_not_exists $CGROUP_MEMORY_HOME
+		echo $2 > ${CGROUP_MEMORY_HOME}/memory.limit_in_bytes
+		cat $PROCESS_PID_FILE > ${CGROUP_MEMORY_HOME}/cgroup.procs
 		echo "The process will be killed in case more than $2 Bytes of memory is allocated"
 	else
 		echo "Container $1 is active or doesn't exist"
+	fi
+}
+
+function copy_into_container() {
+	if is_active $1
+	then
+		if [ -f $2 ]
+		then
+			cp $2 ${FS_ROOT}$3
+		elif [ -d $2 ]
+		then
+			cp -rf $2 ${FS_ROOT}$3
+		else
+			echo "Can't find $2"
+		fi
+	else
+		echo "Container is inactive or doesn't exist"
 	fi
 }
 
@@ -470,10 +493,14 @@ case "$1" in
 	install_app $2
 	;;
   memory)
-    if [ $# -ne 3 ]; then echo "Usage: $0 memory <container id> <memory limit in bytes>"; exit 1; fi  
-	memory_cgroup $2 $3
+        if [ $# -ne 3 ]; then echo "Usage: $0 memory <container id> <memory limit in bytes>"; exit 1; fi
+        memory_cgroup $2 $3
 	;;
-  *) echo $"Usage: $0 {start|stop|ps|exec|expose|clean|export|memory}"
+  cp)
+	if [ $# -ne 4 ]; then echo "Usage: $0 cp <container id> <host path> <container path>"; exit 1; fi
+	copy_into_container $2 $3 $4
+	;;
+  *) echo $"Usage: $0 {start|stop|ps|exec|expose|clean|export|memory|cp}"
 	 echo "start <image name> <cmd> -> start new container"
 	 echo "stop <container id> -> stop running container"
 	 echo "ps -> list running containers"
@@ -482,6 +509,7 @@ case "$1" in
 	 echo "clean -> delete all inactive containers"
 	 echo "export <image name> -> Create image from docker image"
 	 echo "memory <container id> <memory limit in bytes> -> Create cgroup memory constaint"
+	 echo "cp <container id> <host path> <container path> -> Copy file or directory into container"
      exit 1
 esac
 
