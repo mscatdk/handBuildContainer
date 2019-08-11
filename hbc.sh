@@ -58,15 +58,20 @@ function set_container_paths() {
 }
 
 function is_active() {
-	set_container_paths $1
-	if [ ! -f $INITIAL_PID_FILE ]
+	if [ -d $CONTAINER_HOME/$1 ]
 	then
-		false
-	elif [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
-	then
-		false
+		set_container_paths $1
+		if [ ! -f $INITIAL_PID_FILE ]
+		then
+			false
+		elif [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
+		then
+			false
+		else
+			true
+		fi
 	else
-		true
+		false
 	fi
 }
 
@@ -415,6 +420,21 @@ function install_app() {
 	echo "Installation of $VERSION has completed"
 }
 
+##
+function memory_cgroup() {
+	if is_active $1
+	then
+		set_container_paths $1
+
+		mkdir_if_not_exists /sys/fs/cgroup/memory/$1
+		echo $2 > /sys/fs/cgroup/memory/$1/memory.limit_in_bytes
+		cat $INITIAL_PID_FILE > /sys/fs/cgroup/memory/$1/cgroup.procs
+		echo "The process will be killed in case more than $2 Bytes of memory is allocated"
+	else
+		echo "Container $1 is active or doesn't exist"
+	fi
+}
+
 ###########################################################################################
 ## Parse Arguments
 ###########################################################################################
@@ -464,12 +484,18 @@ case "$1" in
   install)
 	install_app $2
 	;;
-  *) echo $"Usage: $0 {start|stop|exec|ps|clean|export}"
-	 echo "start -> start new container"
-	 echo "stop -> stop running container"
+  memory)
+	memory_cgroup $2 $3
+	;;
+  *) echo $"Usage: $0 {start|stop|ps|exec|expose|clean|export|memory}"
+	 echo "start <image name> <cmd> -> start new container"
+	 echo "stop <container id> -> stop running container"
 	 echo "ps -> list running containers"
+	 echo "exec <container id> <cmd> -> Enter a running container"
+	 echo "expose <container id> <host port> <container port> -> Port forwading a host port to a container port"
 	 echo "clean -> delete all inactive containers"
-	 echo "export -> Create image from docker image"
+	 echo "export <image name> -> Create image from docker image"
+	 echo "memory <container id> <memory limit in bytes> -> Create cgroup memory constaint"
      exit 1
 esac
 
