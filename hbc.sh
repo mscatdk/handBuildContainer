@@ -441,6 +441,9 @@ function memory_cgroup() {
 	fi
 }
 
+###########################################################################################
+## cp
+###########################################################################################
 function copy_into_container() {
 	if is_active $1
 	then
@@ -476,8 +479,8 @@ case "$1" in
     export_image $2
 	;;
   expose)
-    if [ $# -ne 3 ]; then echo "Usage: $0 expose <container id> <host port> <container port>"; exit 1; fi
-	expose_port $2 $3
+    if [ $# -ne 4 ]; then echo "Usage: $0 expose <container id> <host port> <container port>"; exit 1; fi
+	expose_port $3 $4
 	;;
   exec)
     if [ $# -ne 3 ]; then echo "Usage: $0 exec <container id> <cmd>"; exit 1; fi
