@@ -37,7 +37,7 @@ function create_directory_strcuture() {
 }
 
 function create_containter_directories() {
-	[ -d ${CONTAINER_HOME}/$1 ] && rm -rf ${CONTAINER_HOME}/$1
+	[ -d ${CONTAINER_HOME}/$1 ] && [ ${CONTAINER_HOME}/$1 != "/" ] && rm -rf ${CONTAINER_HOME}/$1
 	mkdir -p ${CONTAINER_HOME}/$1/rootfs
 	mkdir -p ${CONTAINER_HOME}/$1/.locks
 	mkdir -p ${CONTAINER_HOME}/$1/config
@@ -164,9 +164,14 @@ function prepare_image() {
 	locate_image $1
 
 	# Create/recreate filesystem
-	rm -rf $FS_ROOT
-	mkdir $FS_ROOT
-
+	if [ $FS_ROOT != "/" ]; then 
+		rm -rf $FS_ROOT
+		mkdir $FS_ROOT
+	else
+		echo "FS_ROOT not initialized correctly"
+		exit
+	fi
+	
 	echo Prepare fs based on $IMAGE_PATH
 	tar -xf $IMAGE_PATH -C $FS_ROOT
 	echo nameserver 8.8.8.8 > ${FS_ROOT}/etc/resolv.conf
@@ -181,7 +186,7 @@ function prepare_image() {
 function create_virtual_network() {
 	mkdir_if_not_exists /var/run/netns
 
-	if [ -f /var/run/netns/$NS ]; then
+	if [ -f /var/run/netns/$NS ] && [ -n $NS ]; then
 		rm -rf /var/run/netns/$NS
 	fi
 
@@ -385,7 +390,11 @@ function delete_inactive_containers() {
 			then
 				echo Deleting $CONTAINER_ID
 				clean_mounts
-				rm -rf ${CONTAINER_HOME}/${CONTAINER_ID}
+				if [ ${CONTAINER_HOME}/${CONTAINER_ID} != "/" ]; then
+					rm -rf ${CONTAINER_HOME}/${CONTAINER_ID}
+				else
+					echo "CONTAINER_HOME and CONTAINER_ID missing"
+				fi
 			fi
 		fi
 	done
