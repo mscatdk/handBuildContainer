@@ -41,6 +41,7 @@ function create_containter_directories() {
 	mkdir -p ${CONTAINER_HOME}/$1/rootfs
 	mkdir -p ${CONTAINER_HOME}/$1/.locks
 	mkdir -p ${CONTAINER_HOME}/$1/config
+	mkdir -p ${CONTAINER_HOME}/$1/log
 }
 
 function set_container_paths() {
@@ -52,6 +53,9 @@ function set_container_paths() {
 	export INITIAL_PID_FILE=${CONTAINER_HOME}/$1/.locks/initial_pid.lock
 	export PROCESS_PID_FILE=${CONTAINER_HOME}/$1/config/process_pid
 	export UNSHARE_PID_FILE=${CONTAINER_HOME}/$1/config/unshare_pid
+	export LOG_HOME=${CONTAINER_HOME}/$1/log
+	export IP_FILE=${CONTAINER_HOME}/$1/config/ip
+	export CONTAINER_IP=`cat $IP_FILE`
 
 	export IMAGE_NAME_FILE=${CONTAINER_HOME}/$1/config/image_name
 	export CMD_FILE=${CONTAINER_HOME}/$1/config/cmd
@@ -91,6 +95,9 @@ function clean_mounts() {
 
 	# Remove memory cgroup
 	[ -d $CGROUP_MEMORY_HOME ] && rmdir $CGROUP_MEMORY_HOME
+
+	# Release IP
+	[ -f $IP_FILE ] && rm $IP_FILE
 }
 
 function cleanup() {
@@ -178,13 +185,15 @@ function prepare_image() {
 	echo nameserver 8.8.8.8 > ${FS_ROOT}/etc/resolv.conf
 	echo hbc > ${FS_ROOT}/etc/hostname
 	echo 127.0.0.1        localhost > ${FS_ROOT}/etc/hosts
-	echo 10.1.0.1         hbc >> ${FS_ROOT}/etc/hosts
+	echo $CONTAINER_IP         hbc >> ${FS_ROOT}/etc/hosts
 }
 
 ###########################################################################################
 ## Configure Container Namespaces
 ###########################################################################################
 function create_virtual_network() {
+	TEST=${CONTAINER_IP}
+	echo $TEST me
 	mkdir_if_not_exists /var/run/netns
 
 	if [ -f /var/run/netns/$NS ]; then
@@ -196,7 +205,7 @@ function create_virtual_network() {
 	ip link add con0 type veth peer name eth0 netns $NS
 
 	ip addr add 10.1.0.10/24 dev con0
-	ip netns exec $NS ip addr add 10.1.0.1/24 dev eth0
+	ip netns exec $NS ip addr add ${TEST}/24 dev eth0
 	ip link set con0 up
 	ip netns exec $NS ip link set eth0 up
 	ip netns exec $NS ip link set lo up
@@ -269,6 +278,12 @@ function wait_for_unshare_process() {
 	configure_container $UNSHARE_PID
 }
 
+function get_ip() {
+	cat $CONTAINER_HOME/*/config/ip.txt > ${IP_FILE}.tmp 2> /dev/null
+	echo 10.1.0.{1..255} | tr ' ' '\012' | grep -v -f ${IP_FILE}.tmp | head -n 1 > ${IP_FILE}
+	rm ${IP_FILE}.tmp
+}
+
 function start_container() {
 	export CONTAINER_ID=$(generate_id)
 	IMAGE_NAME=$1
@@ -279,6 +294,9 @@ function start_container() {
 	echo $CMD > $CMD_FILE
 	echo $IMAGE_NAME > $IMAGE_NAME_FILE
 
+	get_ip
+	echo `cat ${IP_FILE}`
+
 	info "Starting CMD: $CMD Container ID: $CONTAINER_ID Image: $IMAGE_NAME"
 	prepare_container $IMAGE_NAME
 
@@ -286,7 +304,7 @@ function start_container() {
 	echo Container ID: $CONTAINER_ID
 
 	# Create process that will complete the configuration once unshare has completed
-	wait_for_unshare_process &
+	CONTAINER_IP=$CONTAINER_IP wait_for_unshare_process &> ${LOG_HOME}/config.log &
 
 	# Enable user namespaces on Red Hat and CentOS
 	[ -f /proc/sys/user/max_user_namespaces ] && [ 0 -eq `cat /proc/sys/user/max_user_namespaces` ] && echo 640 > /proc/sys/user/max_user_namespaces
@@ -335,13 +353,28 @@ function export_image() {
 ## Expose
 ###########################################################################################
 function expose_port() {
-	if [ 0 -eq $(iptables -t nat -S | grep "N DOCKER" | wc -l) ]
-	then
-		iptables -t nat -A PREROUTING ! -i con0 -p tcp --dport $1 -j DNAT --to-destination 10.1.0.1:$2 -m comment --comment handBuildContainer
-		iptables -t nat -A POSTROUTING -s 10.1.0.1/32 -d 10.1.0.1/32 -p tcp --dport $2 -j MASQUERADE -m comment --comment handBuildContainer
-		iptables -A FORWARD -d 10.1.0.1/32 ! -i con0 -o con0 -p tcp --dport $2 -j ACCEPT -m comment --comment handBuildContainer
+	CONTAINER_ID=$1
+        if [ -d ${CONTAINER_HOME}/${CONTAINER_ID} ]
+        then
+                if is_active $CONTAINER_ID
+                then
+			# Set container IP
+			set_container_paths $CONTAINER_ID
+			HOST_PORT=$2
+			CONTAINER_PORT=$3
+			if [ 0 -eq $(iptables -t nat -S | grep "N DOCKER" | wc -l) ]
+			then
+				iptables -t nat -A PREROUTING ! -i con0 -p tcp --dport $HOST_PORT -j DNAT --to-destination ${$CONTAINER_IP}:${CONTAINER_PORT} -m comment --comment handBuildContainer
+				iptables -t nat -A POSTROUTING -s ${$CONTAINER_IP}/32 -d ${$CONTAINER_IP}/32 -p tcp --dport ${CONTAINER_PORT} -j MASQUERADE -m comment --comment handBuildContainer
+				iptables -A FORWARD -d ${CONTAINER_IP}/32 ! -i con0 -o con0 -p tcp --dport ${CONTAINER_PORT} -j ACCEPT -m comment --comment handBuildContainer
+			else
+				echo Expose doesn\'t work when Docker iptable entries are present
+			fi
+		else
+			echo Container isn\'t running
+		fi
 	else
-		echo Expose doesn\'t work when Docker iptable entries are present
+		echo Container with id: ${CONTAINER_ID} doesn\'t exist
 	fi
 }
 
@@ -500,7 +533,7 @@ case "$1" in
 	;;
   expose)
     if [ $# -ne 4 ]; then echo "Usage: $0 expose <container id> <host port> <container port>"; exit 1; fi
-	expose_port $3 $4
+	expose_port $2 $3 $4
 	;;
   exec)
     if [ $# -ne 3 ]; then echo "Usage: $0 exec <container id> <cmd>"; exit 1; fi
