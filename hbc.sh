@@ -44,9 +44,9 @@ function create_containter_directories() {
 }
 
 function set_container_paths() {
+	export CONTAINER_ID=$1
+
 	export FS_ROOT=${CONTAINER_HOME}/$1/rootfs
-	export HOST_MOUNT=${BASE_PATH}/data
-	export CON_MOUNT=$FS_ROOT/etc/demo
 
 	export CONFIG_COMPLETED_LOCK_FILE=${CONTAINER_HOME}/$1/.locks/config_completed.lock
 	export INITIAL_PID_FILE=${CONTAINER_HOME}/$1/.locks/initial_pid.lock
@@ -77,11 +77,17 @@ function is_active() {
 	fi
 }
 
+function get_mounts() {
+	tail -n +1 -- /proc/*/mounts 2> /dev/null | grep $CONTAINER_ID | awk '{ print $2 }' | sort | uniq
+}
+
 function clean_mounts() {
-        # Remove mount point
-        umount $CON_MOUNT >> $LOG_FILE 2>&1
-        umount ${FS_ROOT}/sys >> $LOG_FILE 2>&1
-        umount ${FS_ROOT}/proc >> $LOG_FILE 2>&1
+	# Remove mount point
+	num_mounts=$(get_mounts | wc -l)
+	if [ $num_mounts -gt 1 ]
+	then
+		get_mounts | xargs umount
+	fi
 
 	# Remove memory cgroup
 	[ -d $CGROUP_MEMORY_HOME ] && rmdir $CGROUP_MEMORY_HOME
@@ -230,12 +236,6 @@ function configure_container() {
 ## Start Container
 ###########################################################################################
 function prepare_mount() {
-	# Create mount point
-	mkdir_if_not_exists $HOST_MOUNT
-	mkdir_if_not_exists $CON_MOUNT
-
-	mount --make-shared --bind $HOST_MOUNT $CON_MOUNT
-
 	mount -t sysfs none ${FS_ROOT}/sys
 	# Unshare will do the actual mount later
 	mount -t tmpfs tmpfs ${FS_ROOT}/proc
@@ -462,6 +462,26 @@ function copy_into_container() {
 }
 
 ###########################################################################################
+## mount
+###########################################################################################
+function bind_mount() {
+	set_container_paths $1
+	if [ -d $2 ]
+	then
+		if [ -d $FS_ROOT ]
+		then
+			HOST_PATH=${FS_ROOT}/$3
+			mkdir_if_not_exists $HOST_PATH
+			nsenter -m -t `cat $PROCESS_PID_FILE` mount --make-shared --bind $2 $HOST_PATH
+		else
+			echo "Container root filesystem doesn't exist"
+		fi
+	else
+		echo "The path $2 doesn't exist"
+	fi
+}
+
+###########################################################################################
 ## Parse Arguments
 ###########################################################################################
 create_directory_strcuture
@@ -499,6 +519,10 @@ case "$1" in
         if [ $# -ne 3 ]; then echo "Usage: $0 memory <container id> <memory limit in bytes>"; exit 1; fi
         memory_cgroup $2 $3
 	;;
+  mount)
+		if [ $# -ne 4 ]; then echo "Usage: $0 mount <container id> <host path> <container path>"; exit 1; fi
+		bind_mount $2 $3 $4
+	;;
   cp)
 	if [ $# -ne 4 ]; then echo "Usage: $0 cp <container id> <host path> <container path>"; exit 1; fi
 	copy_into_container $2 $3 $4
@@ -513,6 +537,7 @@ case "$1" in
 	 echo "export <image name> -> Create image from docker image"
 	 echo "memory <container id> <memory limit in bytes> -> Create cgroup memory constaint"
 	 echo "cp <container id> <host path> <container path> -> Copy file or directory into container"
+	 echo "mount <container id> <host path> <container path> -> mount an exist directory inside the container"
      exit 1
 esac
 
