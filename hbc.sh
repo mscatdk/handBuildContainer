@@ -13,10 +13,12 @@ IMAGE_HOME=${BASE_PATH}/images
 APP_HOME=${BASE_PATH}/bin
 LOG_FILE=${BASE_PATH}/hbc.log
 
-HOST_IP=10.1.0.1
+# You will need to manually remove the bridge and run install when chaning the subnet
+# ovs-vsctl del-br br-hbc0
+CONTAINER_SUBNET=10.3.0.0
+BRIDGE_IP=`echo $CONTAINER_SUBNET | sed "s/\.[^\.]*$//"`.1
 
 HOSTIF=$(ip route show | grep default | awk '{print $5}')
-CONTAINERIF='con0'
 
 ###########################################################################################
 ## Common
@@ -58,6 +60,7 @@ function set_container_paths() {
 	export LOG_HOME=${CONTAINER_HOME}/$1/log
 	export IP_FILE=${CONTAINER_HOME}/$1/config/ip
 	export CONTAINER_IP=`cat $IP_FILE`
+	export CONTAINER_IF_NAME=con`echo $CONTAINER_IP | cut -f4 -d '.'`
 
 	export IMAGE_NAME_FILE=${CONTAINER_HOME}/$1/config/image_name
 	export CMD_FILE=${CONTAINER_HOME}/$1/config/cmd
@@ -108,6 +111,8 @@ function cleanup() {
 	# Remove iptable entries
 	iptables -S | sed "/handBuildContainer/s/-A/iptables -D/e" &> /dev/null
 	iptables -t nat -S | sed "/handBuildContainer/s/-A/iptables -t nat -D/e" &> /dev/null
+	
+	ovs-vsctl del-port br-hbc0 $CONTAINER_IF_NAME
 }
 
 function info() {
@@ -202,28 +207,19 @@ function create_virtual_network() {
 
 	ln -s /proc/$NS/ns/net /var/run/netns/$NS
 
-	ip link add con0 type veth peer name eth0 netns $NS
+	# host setup
+	ip link add $CONTAINER_IF_NAME type veth peer name eth0 netns $NS
+	ip link set $CONTAINER_IF_NAME nomaster
+	ip link set $CONTAINER_IF_NAME up
+	
+	ovs-vsctl add-port br-hbc0 $CONTAINER_IF_NAME
 
-	ip addr add ${HOST_IP}/24 dev con0
+	# Container setup
 	ip netns exec $NS ip addr add ${CONTAINER_IP}/24 dev eth0
-	ip link set con0 up
 	ip netns exec $NS ip link set eth0 up
 	ip netns exec $NS ip link set lo up
 
-	ip netns exec $NS ip route add default via ${HOST_IP}
-}
-
-function configure_network() {
-	# Package forwarding
-	/bin/echo 1 > /proc/sys/net/ipv4/ip_forward
-
-	iptables -t nat -A POSTROUTING -o $CONTAINERIF -j MASQUERADE -m comment --comment "handBuildContainer"
-	iptables -A FORWARD -i $CONTAINERIF -o $HOSTIF -m state --state RELATED,ESTABLISHED -j ACCEPT -m comment --comment "handBuildContainer"
-	iptables -A FORWARD -i $HOSTIF -o $CONTAINERIF -j ACCEPT -m comment --comment "handBuildContainer"
-
-	iptables -t nat -A POSTROUTING -o $HOSTIF -j MASQUERADE -m comment --comment "handBuildContainer"
-	iptables -A FORWARD -i $HOSTIF -o $CONTAINERIF -m state --state RELATED,ESTABLISHED -j ACCEPT -m comment --comment "handBuildContainer"
-	iptables -A FORWARD -i $CONTAINERIF -o $HOSTIF -j ACCEPT -m comment --comment "handBuildContainer"
+	ip netns exec $NS ip route add default via ${BRIDGE_IP}
 }
 
 function create_user_mapping() {
@@ -236,7 +232,6 @@ function configure_container() {
 
 	create_user_mapping
 	create_virtual_network
-	configure_network
 
 	touch $CONFIG_COMPLETED_LOCK_FILE
 }
@@ -280,8 +275,9 @@ function wait_for_unshare_process() {
 
 function get_ip() {
 	IP_FILE=${CONTAINER_HOME}/$1/config/ip
-	cat $CONTAINER_HOME/*/config/ip.txt > ${IP_FILE}.tmp 2> /dev/null
-	echo 10.1.0.{2..255} | tr ' ' '\012' | grep -v -f ${IP_FILE}.tmp | head -n 1 > ${IP_FILE}
+	IP_BASE=$(echo ${CONTAINER_SUBNET} | sed "s/\.[^\.]*$//")
+	cat $CONTAINER_HOME/*/config/ip > ${IP_FILE}.tmp 2> /dev/null
+	echo ${IP_BASE}.{2..255} | tr ' ' '\012' | grep -v -f ${IP_FILE}.tmp | head -n 1 > ${IP_FILE}
 	rm ${IP_FILE}.tmp
 }
 
@@ -429,6 +425,48 @@ function delete_inactive_containers() {
 ###########################################################################################
 ## Installation
 ###########################################################################################
+function install_OpenvSwitch() {
+	if VERB="$( which apt-get )" 2> /dev/null; then
+		apt-get update
+		apt-get install -y openvswitch-switch
+	elif VERB="$( which yum )" 2> /dev/null; then
+		yum -y update
+		yum -y install openvswitch
+		systemctl start openvswitch
+	else
+		echo "No supported package manager installed on system"
+		exit 1
+	fi
+}
+
+function create_network_bridge() {
+	if [ `ovs-vsctl show | grep br-hbc0 | wc -l` -eq 0 ]
+	then
+		ovs-vsctl add-br br-hbc0
+		ip addr add $BRIDGE_IP/24 dev br-hbc0
+		ip link set br-hbc0 up
+	fi
+}
+
+function create_bridge_iptable_entries() {
+	# Enable Package forwarding
+	/bin/echo 1 > /proc/sys/net/ipv4/ip_forward
+
+	# Remove existing iptable entries
+	iptables -S | sed "/hbcBridge/s/-A/iptables -D/e" &> /dev/null
+	iptables -t nat -S | sed "/hbcBridge/s/-A/iptables -t nat -D/e" &> /dev/null
+
+	iptables -t nat -A POSTROUTING -s ${CONTAINER_SUBNET}/24 -o $HOSTIF -j MASQUERADE -m comment --comment hbcBridge
+	iptables -A FORWARD -s ${CONTAINER_SUBNET}/24 -o $HOSTIF -j ACCEPT -m comment --comment hbcBridge
+	iptables -A FORWARD -d ${CONTAINER_SUBNET}/24 -i $HOSTIF -j ACCEPT -m comment --comment hbcBridge
+}
+
+function install_network_bridge() {
+	install_OpenvSwitch
+	create_network_bridge
+	create_bridge_iptable_entries
+}
+
 function download_file() {
 	curl -s --fail $1 -o $2
 	RC=$?
@@ -455,6 +493,8 @@ function install_app() {
 
 	[ -f /usr/bin/hbc ] && rm /usr/bin/hbc
 	ln -s ${APP_HOME}/hbc.sh /usr/bin/hbc
+	
+	install_network_bridge
 
 	echo "Installation of $VERSION has completed"
 }
