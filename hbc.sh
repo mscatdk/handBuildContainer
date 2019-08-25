@@ -13,6 +13,8 @@ IMAGE_HOME=${BASE_PATH}/images
 APP_HOME=${BASE_PATH}/bin
 LOG_FILE=${BASE_PATH}/hbc.log
 
+HOST_IP=10.1.0.1
+
 HOSTIF=$(ip route show | grep default | awk '{print $5}')
 CONTAINERIF='con0'
 
@@ -192,8 +194,6 @@ function prepare_image() {
 ## Configure Container Namespaces
 ###########################################################################################
 function create_virtual_network() {
-	TEST=${CONTAINER_IP}
-	echo $TEST me
 	mkdir_if_not_exists /var/run/netns
 
 	if [ -f /var/run/netns/$NS ]; then
@@ -204,13 +204,13 @@ function create_virtual_network() {
 
 	ip link add con0 type veth peer name eth0 netns $NS
 
-	ip addr add 10.1.0.10/24 dev con0
-	ip netns exec $NS ip addr add ${TEST}/24 dev eth0
+	ip addr add ${HOST_IP}/24 dev con0
+	ip netns exec $NS ip addr add ${CONTAINER_IP}/24 dev eth0
 	ip link set con0 up
 	ip netns exec $NS ip link set eth0 up
 	ip netns exec $NS ip link set lo up
 
-	ip netns exec $NS ip route add default via 10.1.0.10
+	ip netns exec $NS ip route add default via ${HOST_IP}
 }
 
 function configure_network() {
@@ -279,8 +279,9 @@ function wait_for_unshare_process() {
 }
 
 function get_ip() {
+	IP_FILE=${CONTAINER_HOME}/$1/config/ip
 	cat $CONTAINER_HOME/*/config/ip.txt > ${IP_FILE}.tmp 2> /dev/null
-	echo 10.1.0.{1..255} | tr ' ' '\012' | grep -v -f ${IP_FILE}.tmp | head -n 1 > ${IP_FILE}
+	echo 10.1.0.{2..255} | tr ' ' '\012' | grep -v -f ${IP_FILE}.tmp | head -n 1 > ${IP_FILE}
 	rm ${IP_FILE}.tmp
 }
 
@@ -290,12 +291,13 @@ function start_container() {
 	CMD=$2
 
 	create_containter_directories $CONTAINER_ID
+	
+	get_ip $CONTAINER_ID
+	echo `cat ${IP_FILE}`
+	
 	set_container_paths $CONTAINER_ID
 	echo $CMD > $CMD_FILE
 	echo $IMAGE_NAME > $IMAGE_NAME_FILE
-
-	get_ip
-	echo `cat ${IP_FILE}`
 
 	info "Starting CMD: $CMD Container ID: $CONTAINER_ID Image: $IMAGE_NAME"
 	prepare_container $IMAGE_NAME
@@ -304,7 +306,7 @@ function start_container() {
 	echo Container ID: $CONTAINER_ID
 
 	# Create process that will complete the configuration once unshare has completed
-	CONTAINER_IP=$CONTAINER_IP wait_for_unshare_process &> ${LOG_HOME}/config.log &
+	wait_for_unshare_process &> ${LOG_HOME}/config.log &
 
 	# Enable user namespaces on Red Hat and CentOS
 	[ -f /proc/sys/user/max_user_namespaces ] && [ 0 -eq `cat /proc/sys/user/max_user_namespaces` ] && echo 640 > /proc/sys/user/max_user_namespaces
