@@ -337,10 +337,10 @@ function stop_container() {
 			kill -9 `cat $PROCESS_PID_FILE`
 			cleanup
 		else
-			echo Container isn\'t running
+			echo "Container isn't running"
 		fi
 	else
-		echo Container with id: ${CONTAINER_ID} doesn\'t exist
+		echo "Container with id: ${CONTAINER_ID} doesn't exist"
 	fi
 }
 
