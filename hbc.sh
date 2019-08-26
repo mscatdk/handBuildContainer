@@ -60,8 +60,12 @@ function set_container_paths() {
 	export UNSHARE_PID_FILE=${CONTAINER_HOME}/$1/config/unshare_pid
 	export LOG_HOME=${CONTAINER_HOME}/$1/log
 	export IP_FILE=${CONTAINER_HOME}/$1/config/ip
-	export CONTAINER_IP=`cat $IP_FILE`
-	export CONTAINER_IF_NAME=con`echo $CONTAINER_IP | cut -f4 -d '.'`
+
+	if [ -f $IP_FILE ]
+	then
+		export CONTAINER_IP=`cat $IP_FILE`
+		export CONTAINER_IF_NAME=con`echo $CONTAINER_IP | cut -f4 -d '.'`
+	fi
 
 	export IMAGE_NAME_FILE=${CONTAINER_HOME}/$1/config/image_name
 	export CMD_FILE=${CONTAINER_HOME}/$1/config/cmd
@@ -112,7 +116,7 @@ function cleanup() {
 	# Remove iptable entries
 	iptables -S | sed "/${CONTAINER_ID}/s/-A/iptables -D/e" &> /dev/null
 	iptables -t nat -S | sed "/${CONTAINER_ID}/s/-A/iptables -t nat -D/e" &> /dev/null
-	
+
 	ovs-vsctl del-port $BRIDGE_IF $CONTAINER_IF_NAME
 }
 
@@ -213,7 +217,7 @@ function create_virtual_network() {
 	ip link add $CONTAINER_IF_NAME type veth peer name eth0 netns $NS
 	ip link set $CONTAINER_IF_NAME nomaster
 	ip link set $CONTAINER_IF_NAME up
-	
+
 	ovs-vsctl add-port $BRIDGE_IF $CONTAINER_IF_NAME
 
 	# Container setup
@@ -289,10 +293,10 @@ function start_container() {
 	CMD=$2
 
 	create_containter_directories $CONTAINER_ID
-	
+
 	get_ip $CONTAINER_ID
 	echo `cat ${IP_FILE}`
-	
+
 	set_container_paths $CONTAINER_ID
 	echo $CMD > $CMD_FILE
 	echo $IMAGE_NAME > $IMAGE_NAME_FILE
@@ -364,9 +368,9 @@ function expose_port() {
 			CONTAINER_PORT=$3
 			if [ 0 -eq $(iptables -t nat -S | grep "N DOCKER" | wc -l) ]
 			then
-				iptables -t nat -A PREROUTING ! -i con0 -p tcp --dport $HOST_PORT -j DNAT --to-destination ${$CONTAINER_IP}:${CONTAINER_PORT} -m comment --comment $CONTAINER_ID
-				iptables -t nat -A POSTROUTING -s ${$CONTAINER_IP}/32 -d ${$CONTAINER_IP}/32 -p tcp --dport ${CONTAINER_PORT} -j MASQUERADE -m comment --comment $CONTAINER_ID
-				iptables -A FORWARD -d ${CONTAINER_IP}/32 ! -i con0 -o con0 -p tcp --dport ${CONTAINER_PORT} -j ACCEPT -m comment --comment $CONTAINER_ID
+				iptables -t nat -A PREROUTING -p tcp --dport $HOST_PORT -j DNAT --to-destination ${CONTAINER_IP}:${CONTAINER_PORT} -m comment --comment $CONTAINER_ID
+				iptables -t nat -A POSTROUTING -s ${CONTAINER_IP}/32 -d ${CONTAINER_IP}/32 -p tcp --dport ${CONTAINER_PORT} -j MASQUERADE -m comment --comment $CONTAINER_ID
+				iptables -A FORWARD -d ${CONTAINER_IP}/32 -p tcp --dport ${CONTAINER_PORT} -j ACCEPT -m comment --comment $CONTAINER_ID
 			else
 				echo "Expose doesn't work when Docker iptable entries are present"
 			fi
@@ -505,7 +509,7 @@ function install_app() {
 
 	[ -f /usr/bin/hbc ] && rm /usr/bin/hbc
 	ln -s ${APP_HOME}/hbc.sh /usr/bin/hbc
-	
+
 	install_network_bridge
 
 	echo "Installation of $VERSION has completed"
@@ -577,7 +581,7 @@ if [ `iptables -t nat -S | grep hbcBridge | wc -l` -ne 1 ] || [ `iptables -S | g
 then
 	echo "Repair iptable entries"
 	create_bridge_iptable_entries
-fi 
+fi
 
 ###########################################################################################
 ## Parse Arguments
