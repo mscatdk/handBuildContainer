@@ -2,8 +2,6 @@
 
 The purpose of this repository is to implement containers using generally available Linux commands. The current implementation support some of the most common features e.g. entering a running container. However, the following limitations exists:
 
-* Only one container can run at a time (Hardcoded IPs).
-
 * Containers can only be run in interactive mode.
 
 * Port forwarding doesn't work when Docker iptable entries are present.
