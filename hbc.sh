@@ -18,6 +18,7 @@ LOG_FILE=${BASE_PATH}/hbc.log
 CONTAINER_SUBNET=10.3.0.0
 BRIDGE_IP=`echo $CONTAINER_SUBNET | sed "s/\.[^\.]*$//"`.1
 
+BRIDGE_IF=br-hbc0
 HOSTIF=$(ip route show | grep default | awk '{print $5}')
 
 ###########################################################################################
@@ -109,10 +110,10 @@ function cleanup() {
 	clean_mounts
 
 	# Remove iptable entries
-	iptables -S | sed "/handBuildContainer/s/-A/iptables -D/e" &> /dev/null
-	iptables -t nat -S | sed "/handBuildContainer/s/-A/iptables -t nat -D/e" &> /dev/null
+	iptables -S | sed "/${CONTAINER_ID}/s/-A/iptables -D/e" &> /dev/null
+	iptables -t nat -S | sed "/${CONTAINER_ID}/s/-A/iptables -t nat -D/e" &> /dev/null
 	
-	ovs-vsctl del-port br-hbc0 $CONTAINER_IF_NAME
+	ovs-vsctl del-port $BRIDGE_IF $CONTAINER_IF_NAME
 }
 
 function info() {
@@ -135,6 +136,7 @@ function get_cpu_arch() {
 	then
 		echo "arm"
 	else
+		# Signal an error
 		echo ""
 		exit 128
 	fi
@@ -212,7 +214,7 @@ function create_virtual_network() {
 	ip link set $CONTAINER_IF_NAME nomaster
 	ip link set $CONTAINER_IF_NAME up
 	
-	ovs-vsctl add-port br-hbc0 $CONTAINER_IF_NAME
+	ovs-vsctl add-port $BRIDGE_IF $CONTAINER_IF_NAME
 
 	# Container setup
 	ip netns exec $NS ip addr add ${CONTAINER_IP}/24 dev eth0
@@ -352,27 +354,27 @@ function export_image() {
 ###########################################################################################
 function expose_port() {
 	CONTAINER_ID=$1
-        if [ -d ${CONTAINER_HOME}/${CONTAINER_ID} ]
-        then
-                if is_active $CONTAINER_ID
-                then
+	if [ -d ${CONTAINER_HOME}/${CONTAINER_ID} ]
+	then
+		if is_active $CONTAINER_ID
+		then
 			# Set container IP
 			set_container_paths $CONTAINER_ID
 			HOST_PORT=$2
 			CONTAINER_PORT=$3
 			if [ 0 -eq $(iptables -t nat -S | grep "N DOCKER" | wc -l) ]
 			then
-				iptables -t nat -A PREROUTING ! -i con0 -p tcp --dport $HOST_PORT -j DNAT --to-destination ${$CONTAINER_IP}:${CONTAINER_PORT} -m comment --comment handBuildContainer
-				iptables -t nat -A POSTROUTING -s ${$CONTAINER_IP}/32 -d ${$CONTAINER_IP}/32 -p tcp --dport ${CONTAINER_PORT} -j MASQUERADE -m comment --comment handBuildContainer
-				iptables -A FORWARD -d ${CONTAINER_IP}/32 ! -i con0 -o con0 -p tcp --dport ${CONTAINER_PORT} -j ACCEPT -m comment --comment handBuildContainer
+				iptables -t nat -A PREROUTING ! -i con0 -p tcp --dport $HOST_PORT -j DNAT --to-destination ${$CONTAINER_IP}:${CONTAINER_PORT} -m comment --comment $CONTAINER_ID
+				iptables -t nat -A POSTROUTING -s ${$CONTAINER_IP}/32 -d ${$CONTAINER_IP}/32 -p tcp --dport ${CONTAINER_PORT} -j MASQUERADE -m comment --comment $CONTAINER_ID
+				iptables -A FORWARD -d ${CONTAINER_IP}/32 ! -i con0 -o con0 -p tcp --dport ${CONTAINER_PORT} -j ACCEPT -m comment --comment $CONTAINER_ID
 			else
-				echo Expose doesn\'t work when Docker iptable entries are present
+				echo "Expose doesn't work when Docker iptable entries are present"
 			fi
 		else
-			echo Container isn\'t running
+			echo "Container isn't running"
 		fi
 	else
-		echo Container with id: ${CONTAINER_ID} doesn\'t exist
+		echo "Container with id: ${CONTAINER_ID} doesn't exist"
 	fi
 }
 
@@ -440,11 +442,20 @@ function install_OpenvSwitch() {
 }
 
 function create_network_bridge() {
-	if [ `ovs-vsctl show | grep br-hbc0 | wc -l` -eq 0 ]
+	if [ `ovs-vsctl show | grep $BRIDGE_IF | wc -l` -eq 0 ]
 	then
-		ovs-vsctl add-br br-hbc0
-		ip addr add $BRIDGE_IP/24 dev br-hbc0
-		ip link set br-hbc0 up
+		ovs-vsctl add-br $BRIDGE_IF
+	fi
+}
+
+function config_network_bridge() {
+	ifconfig $BRIDGE_IF | grep $BRIDGE_IP &> /dev/null
+	rc=$?
+	if [ $rc -ne 0 ]
+	then
+		echo "Set bridge ip to $BRIDGE_IP"
+		ip addr add $BRIDGE_IP/24 dev $BRIDGE_IF
+		ip link set $BRIDGE_IF up
 	fi
 }
 
@@ -464,6 +475,7 @@ function create_bridge_iptable_entries() {
 function install_network_bridge() {
 	install_OpenvSwitch
 	create_network_bridge
+	config_network_bridge
 	create_bridge_iptable_entries
 }
 
@@ -555,6 +567,17 @@ function bind_mount() {
 		echo "The path $2 doesn't exist"
 	fi
 }
+
+###########################################################################################
+## Ensure network configuration is still intact
+###########################################################################################
+config_network_bridge
+
+if [ `iptables -t nat -S | grep hbcBridge | wc -l` -ne 1 ] || [ `iptables -S | grep hbcBridge | wc -l` -ne 2 ]
+then
+	echo "Repair iptable entries"
+	create_bridge_iptable_entries
+fi 
 
 ###########################################################################################
 ## Parse Arguments
