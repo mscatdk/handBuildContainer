@@ -567,7 +567,7 @@ function bind_mount() {
 create_network_bridge
 config_network_bridge
 
-if [ `iptables -t nat -S | grep hbcBridge | wc -l` -ne 1 ] || [ `iptables -S | grep hbcBridge | wc -l` -ne 2 ]
+if [ `iptables -t nat -S | grep hbcBridge | wc -l` -ne 1 ] || [ `iptables -S | grep hbcBridge | wc -l` -ne 3 ]
 then
 	echo "Repair iptable entries"
 	create_bridge_iptable_entries
