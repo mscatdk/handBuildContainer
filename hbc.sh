@@ -117,7 +117,6 @@ function cleanup() {
 	iptables -S | sed "/${CONTAINER_ID}/s/-A/iptables -D/e" &> /dev/null
 	iptables -t nat -S | sed "/${CONTAINER_ID}/s/-A/iptables -t nat -D/e" &> /dev/null
 
-	ip link set dev $CONTAINER_IF_NAME nomaster
 }
 
 function info() {
