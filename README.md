@@ -71,8 +71,8 @@ exit
 sudo hbc expose 4UkcTplBHob0OSWSPz00tYNuiMT7qmTR 9999 8888
 
 # Point your browser on a different computer to host:9999
-# You can alternatively run the following command
-curl 10.1.0.1:8888  (Pres ctrl + c to exit)
+# You can alternatively run the following command (you may need to change the IP based on the IP assigned your container)
+curl 10.3.0.2:8888  (Pres ctrl + c to exit)
 
 # Stop the running container
 sudo hbc stop 4UkcTplBHob0OSWSPz00tYNuiMT7qmTR
