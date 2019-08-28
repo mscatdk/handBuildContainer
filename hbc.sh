@@ -14,7 +14,7 @@ APP_HOME=${BASE_PATH}/bin
 LOG_FILE=${BASE_PATH}/hbc.log
 
 # You will need to manually remove the bridge and run install when chaning the subnet
-# ovs-vsctl del-br br-hbc0
+# ip link del $BRIDGE_IF
 CONTAINER_SUBNET=10.3.0.0
 BRIDGE_IP=`echo $CONTAINER_SUBNET | sed "s/\.[^\.]*$//"`.1
 
@@ -117,7 +117,7 @@ function cleanup() {
 	iptables -S | sed "/${CONTAINER_ID}/s/-A/iptables -D/e" &> /dev/null
 	iptables -t nat -S | sed "/${CONTAINER_ID}/s/-A/iptables -t nat -D/e" &> /dev/null
 
-	ovs-vsctl del-port $BRIDGE_IF $CONTAINER_IF_NAME
+	ip link set dev $CONTAINER_IF_NAME nomaster
 }
 
 function info() {
@@ -218,7 +218,7 @@ function create_virtual_network() {
 	ip link set $CONTAINER_IF_NAME nomaster
 	ip link set $CONTAINER_IF_NAME up
 
-	ovs-vsctl add-port $BRIDGE_IF $CONTAINER_IF_NAME
+	ip link set dev $CONTAINER_IF_NAME master $BRIDGE_IF
 
 	# Container setup
 	ip netns exec $NS ip addr add ${CONTAINER_IP}/24 dev eth0
@@ -431,24 +431,12 @@ function delete_inactive_containers() {
 ###########################################################################################
 ## Installation
 ###########################################################################################
-function install_OpenvSwitch() {
-	if VERB="$( which apt-get )" 2> /dev/null; then
-		apt-get update
-		apt-get install -y openvswitch-switch
-	elif VERB="$( which yum )" 2> /dev/null; then
-		yum -y update
-		yum -y install openvswitch
-		systemctl start openvswitch
-	else
-		echo "No supported package manager installed on system"
-		exit 1
-	fi
-}
-
 function create_network_bridge() {
-	if [ `ovs-vsctl show | grep $BRIDGE_IF | wc -l` -eq 0 ]
+	ip addr show $BRIDGE_IF &> /dev/null
+	rc=$?
+	if [ $rc -ne 0 ]
 	then
-		ovs-vsctl add-br $BRIDGE_IF
+		ip link add name $BRIDGE_IF type bridge
 	fi
 }
 
@@ -474,10 +462,11 @@ function create_bridge_iptable_entries() {
 	iptables -t nat -A POSTROUTING -s ${CONTAINER_SUBNET}/24 -o $HOSTIF -j MASQUERADE -m comment --comment hbcBridge
 	iptables -A FORWARD -s ${CONTAINER_SUBNET}/24 -o $HOSTIF -j ACCEPT -m comment --comment hbcBridge
 	iptables -A FORWARD -d ${CONTAINER_SUBNET}/24 -i $HOSTIF -j ACCEPT -m comment --comment hbcBridge
+	
+	iptables -o br-hbc0 -j ACCEPT -m comment --comment hbcBridge
 }
 
 function install_network_bridge() {
-	install_OpenvSwitch
 	create_network_bridge
 	config_network_bridge
 	create_bridge_iptable_entries
@@ -575,6 +564,7 @@ function bind_mount() {
 ###########################################################################################
 ## Ensure network configuration is still intact
 ###########################################################################################
+create_network_bridge
 config_network_bridge
 
 if [ `iptables -t nat -S | grep hbcBridge | wc -l` -ne 1 ] || [ `iptables -S | grep hbcBridge | wc -l` -ne 2 ]
