@@ -462,7 +462,8 @@ function create_bridge_iptable_entries() {
 	iptables -A FORWARD -s ${CONTAINER_SUBNET}/24 -o $HOSTIF -j ACCEPT -m comment --comment hbcBridge
 	iptables -A FORWARD -d ${CONTAINER_SUBNET}/24 -i $HOSTIF -j ACCEPT -m comment --comment hbcBridge
 	
-	iptables -o br-hbc0 -j ACCEPT -m comment --comment hbcBridge
+	
+	iptables -A FORWARD -o $BRIDGE_IF -j ACCEPT -m comment --comment hbcBridge
 }
 
 function install_network_bridge() {
