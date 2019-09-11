@@ -28,6 +28,14 @@ function generate_id() {
 	< /dev/urandom tr -dc A-Za-z0-9 | head -c${1:-32};echo;
 }
 
+function wait_for_file() {
+        while [ ! -f $1 ]
+        do
+                sleep 0.1
+		echo -ne .
+        done
+}
+
 function mkdir_if_not_exists() {
         [ ! -d $1 ] && mkdir -p $1
 }
@@ -59,6 +67,7 @@ function set_container_paths() {
 	export PROCESS_PID_FILE=${CONTAINER_HOME}/$1/config/process_pid
 	export UNSHARE_PID_FILE=${CONTAINER_HOME}/$1/config/unshare_pid
 	export LOG_HOME=${CONTAINER_HOME}/$1/log
+	export APP_LOG=${CONTAINER_HOME}/$1/log/app.log
 	export IP_FILE=${CONTAINER_HOME}/$1/config/ip
 
 	if [ -f $IP_FILE ]
@@ -73,6 +82,15 @@ function set_container_paths() {
 	export CGROUP_MEMORY_HOME=/sys/fs/cgroup/memory/$1
 }
 
+function is_container_id_valid() {
+	if [ -d ${CONTAINER_HOME}/${1} ]
+	then
+		true
+	else
+		false
+	fi
+}
+
 function is_active() {
 	if [ -d $CONTAINER_HOME/$1 ]
 	then
@@ -80,7 +98,7 @@ function is_active() {
 		if [ ! -f $INITIAL_PID_FILE ]
 		then
 			false
-		elif [ 1 -ne $(ps -ef | grep `cat $INITIAL_PID_FILE` | grep unshare | awk '{print $2}' | wc -l) ]
+		elif [ 1 -ne $(ps -e | grep `cat $UNSHARE_PID_FILE` | wc -l) ]
 		then
 			false
 		else
@@ -312,10 +330,15 @@ function start_container() {
 	# Enable user namespaces on Red Hat and CentOS
 	[ -f /proc/sys/user/max_user_namespaces ] && [ 0 -eq `cat /proc/sys/user/max_user_namespaces` ] && echo 640 > /proc/sys/user/max_user_namespaces
 
-	# Unshare -> Create namespaces and mount proc
-	sh -i -c "echo $$ > $INITIAL_PID_FILE; exec unshare --mount --uts --ipc --net --pid -f --user --mount-proc=${FS_ROOT}/proc ${APP_HOME}/bootstrap.sh $CONFIG_COMPLETED_LOCK_FILE $FS_ROOT $2"
-
-	cleanup
+	if [ "$DAEMON_MODE" == "true" ]
+	then
+		# Unshare -> Create namespaces and mount proc
+		nohup sh -i -c "echo $$ > $INITIAL_PID_FILE; exec unshare --mount --uts --ipc --net --pid -f --user --mount-proc=${FS_ROOT}/proc ${APP_HOME}/bootstrap.sh $CONFIG_COMPLETED_LOCK_FILE $FS_ROOT $2" >> $APP_LOG 2>&1 &
+		wait_for_file $CONFIG_COMPLETED_LOCK_FILE
+	else
+		sh -i -c "echo $$ > $INITIAL_PID_FILE; exec unshare --mount --uts --ipc --net --pid -f --user --mount-proc=${FS_ROOT}/proc ${APP_HOME}/bootstrap.sh $CONFIG_COMPLETED_LOCK_FILE $FS_ROOT $2"
+		cleanup
+	fi
 }
 
 ###########################################################################################
@@ -330,10 +353,10 @@ function stop_container() {
 			set_container_paths $CONTAINER_ID
 
 			# Kill the initial process first to get a clean shell exit
-			kill `cat $INITIAL_PID_FILE`
+			kill `cat $INITIAL_PID_FILE` &>> $LOG_FILE
 			# Kill the unshare process and the parent process in the new PID Namespace
-			kill `cat $UNSHARE_PID_FILE`
-			kill -9 `cat $PROCESS_PID_FILE`
+			kill `cat $UNSHARE_PID_FILE` &>> $LOG_FILE
+			kill -9 `cat $PROCESS_PID_FILE` &>> $LOG_FILE
 			cleanup
 		else
 			echo "Container isn't running"
@@ -560,6 +583,23 @@ function bind_mount() {
 		echo "The path $2 doesn't exist"
 	fi
 }
+###########################################################################################
+## log
+###########################################################################################
+function print_app_log() {
+	set_container_paths $1
+	if is_container_id_valid $1
+	then
+		if [ -f $APP_LOG ]
+		then
+			cat $APP_LOG
+		else
+			echo "log file doesn't exist"
+		fi
+	else
+		echo "container id doesn't exist"
+	fi
+}
 
 ###########################################################################################
 ## Ensure network configuration is still intact
@@ -579,8 +619,16 @@ fi
 create_directory_strcuture
 case "$1" in
   start)
-	if [ $# -ne 3 ]; then echo "Usage: $0 start <image file> <cmd>"; exit 1; fi
-	start_container $2 "$3"
+	shift
+	while getopts d option
+	do
+		case "$option" in
+			d) export DAEMON_MODE="true";;
+		esac
+	done
+	shift $(($OPTIND-1))
+	if [ $# -ne 2 ]; then echo "Usage: $0 start [-d] <image file> <cmd>"; exit 1; fi
+	start_container $1 "$2"
 	;;
   stop)
     if [ $# -ne 2 ]; then echo "Usage: $0 stop <container id>"; exit 1; fi
@@ -619,8 +667,12 @@ case "$1" in
 	if [ $# -ne 4 ]; then echo "Usage: $0 cp <container id> <host path> <container path>"; exit 1; fi
 	copy_into_container $2 $3 $4
 	;;
+  log)
+	if [ $# -ne 2 ]; then echo "Usage: $0 log <container id>"; exit 1; fi
+	print_app_log $2
+	;;
   *) echo $"Usage: $0 {start|stop|ps|exec|expose|clean|export|memory|cp}"
-	 echo "start <image name> <cmd> -> start new container"
+	 echo "start [-d] <image name> <cmd> -> start new container"
 	 echo "stop <container id> -> stop running container"
 	 echo "ps -> list running containers"
 	 echo "exec <container id> <cmd> -> Enter a running container"
@@ -630,6 +682,7 @@ case "$1" in
 	 echo "memory <container id> <memory limit in bytes> -> Create cgroup memory constaint"
 	 echo "cp <container id> <host path> <container path> -> Copy file or directory into container"
 	 echo "mount <container id> <host path> <container path> -> mount an exist directory inside the container"
+	 echo "log <container id> -> print application log for containers running in daemon mode"
      exit 1
 esac
 
