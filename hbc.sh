@@ -388,14 +388,10 @@ function expose_port() {
 			set_container_paths $CONTAINER_ID
 			HOST_PORT=$2
 			CONTAINER_PORT=$3
-			if [ 0 -eq $(iptables -t nat -S | grep "N DOCKER" | wc -l) ]
-			then
-				iptables -t nat -A PREROUTING -p tcp --dport $HOST_PORT -j DNAT --to-destination ${CONTAINER_IP}:${CONTAINER_PORT} -m comment --comment $CONTAINER_ID
-				iptables -t nat -A POSTROUTING -s ${CONTAINER_IP}/32 -d ${CONTAINER_IP}/32 -p tcp --dport ${CONTAINER_PORT} -j MASQUERADE -m comment --comment $CONTAINER_ID
-				iptables -A FORWARD -d ${CONTAINER_IP}/32 -p tcp --dport ${CONTAINER_PORT} -j ACCEPT -m comment --comment $CONTAINER_ID
-			else
-				echo "Expose doesn't work when Docker iptable entries are present"
-			fi
+			iptables -t nat -A PREROUTING ! -i ${BRIDGE_IF} -p tcp --dport $HOST_PORT -j DNAT --to-destination ${CONTAINER_IP}:${CONTAINER_PORT} -m comment --comment $CONTAINER_ID
+			iptables -t nat -A POSTROUTING -s ${CONTAINER_IP}/32 -d ${CONTAINER_IP}/32 -p tcp --dport ${CONTAINER_PORT} -j MASQUERADE -m comment --comment $CONTAINER_ID
+			iptables -A FORWARD -d ${CONTAINER_IP}/32 ! -i ${BRIDGE_IF} -o ${BRIDGE_IF} -p tcp --dport ${CONTAINER_PORT} -j ACCEPT -m comment --comment $CONTAINER_ID
+			iptables -t nat -A OUTPUT -p tcp -m tcp --dport ${HOST_PORT} -j DNAT --to-destination ${CONTAINER_IP}:${CONTAINER_PORT} -m comment --comment $CONTAINER_ID
 		else
 			echo "Container isn't running"
 		fi
@@ -484,9 +480,12 @@ function create_bridge_iptable_entries() {
 	iptables -t nat -A POSTROUTING -s ${CONTAINER_SUBNET}/24 -o $HOSTIF -j MASQUERADE -m comment --comment hbcBridge
 	iptables -A FORWARD -s ${CONTAINER_SUBNET}/24 -o $HOSTIF -j ACCEPT -m comment --comment hbcBridge
 	iptables -A FORWARD -d ${CONTAINER_SUBNET}/24 -i $HOSTIF -j ACCEPT -m comment --comment hbcBridge
-	
-	
+
+
 	iptables -A FORWARD -o $BRIDGE_IF -j ACCEPT -m comment --comment hbcBridge
+
+	iptables -A FORWARD -o ${BRIDGE_IF} -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT -m comment --comment hbcBridge
+	iptables -A FORWARD -i ${BRIDGE_IF} -j ACCEPT -m comment --comment hbcBridge
 }
 
 function install_network_bridge() {
@@ -607,7 +606,7 @@ function print_app_log() {
 create_network_bridge
 config_network_bridge
 
-if [ `iptables -t nat -S | grep hbcBridge | wc -l` -ne 1 ] || [ `iptables -S | grep hbcBridge | wc -l` -ne 3 ]
+if [ `iptables -t nat -S | grep hbcBridge | wc -l` -ne 1 ] || [ `iptables -S | grep hbcBridge | wc -l` -ne 5 ]
 then
 	echo "Repair iptable entries"
 	create_bridge_iptable_entries
