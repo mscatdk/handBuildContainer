@@ -101,9 +101,6 @@ sudo hbc start -d nginx "nginx -g 'daemon off;'"
 # Expose port 80 on the container as port 80 on the host
 sudo hbc expose VpCokegzFqqlmUZ7bUlgzlBEs092B4vw 80 80
 
-# Stop the running container
-sudo hbc stop VpCokegzFqqlmUZ7bUlgzlBEs092B4vw
-
 # Run curl towards localhost
 curl localhost
 
