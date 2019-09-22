@@ -405,6 +405,11 @@ function expose_port() {
 ###########################################################################################
 function exec_container() {
 	set_container_paths $1
+	if [ -d ${CGROUP_MEMORY_HOME} ]
+	then
+		echo $$ > ${CGROUP_MEMORY_HOME}/cgroup.procs
+	fi
+
 	nsenter -m -u -i -n -p -t `cat $PROCESS_PID_FILE` chroot $FS_ROOT "$2"
 }
 
