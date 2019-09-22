@@ -472,20 +472,23 @@ function config_network_bridge() {
 function create_bridge_iptable_entries() {
 	# Enable Package forwarding
 	/bin/echo 1 > /proc/sys/net/ipv4/ip_forward
+	/bin/echo 1 > /proc/sys/net/ipv4/conf/${BRIDGE_IF}/route_localnet
 
 	# Remove existing iptable entries
 	iptables -S | sed "/hbcBridge/s/-A/iptables -D/e" &> /dev/null
 	iptables -t nat -S | sed "/hbcBridge/s/-A/iptables -t nat -D/e" &> /dev/null
 
+	# Allow containers to access the internet
 	iptables -t nat -A POSTROUTING -s ${CONTAINER_SUBNET}/24 -o $HOSTIF -j MASQUERADE -m comment --comment hbcBridge
 	iptables -A FORWARD -s ${CONTAINER_SUBNET}/24 -o $HOSTIF -j ACCEPT -m comment --comment hbcBridge
 	iptables -A FORWARD -d ${CONTAINER_SUBNET}/24 -i $HOSTIF -j ACCEPT -m comment --comment hbcBridge
 
-
-	iptables -A FORWARD -o $BRIDGE_IF -j ACCEPT -m comment --comment hbcBridge
-
-	iptables -A FORWARD -o ${BRIDGE_IF} -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT -m comment --comment hbcBridge
+	# Allow package forwarding for the bridge interface
+	iptables -A FORWARD -o ${BRIDGE_IF} -j ACCEPT -m comment --comment hbcBridge
 	iptables -A FORWARD -i ${BRIDGE_IF} -j ACCEPT -m comment --comment hbcBridge
+
+	# Enable MASQUERADE for the bridge interface. Needed for port forwading on localhost.
+	iptables -t nat -A POSTROUTING -o ${BRIDGE_IF} -m addrtype --src-type LOCAL --dst-type UNICAST -j MASQUERADE -m comment --comment hbcBridge
 }
 
 function install_network_bridge() {
@@ -606,7 +609,7 @@ function print_app_log() {
 create_network_bridge
 config_network_bridge
 
-if [ `iptables -t nat -S | grep hbcBridge | wc -l` -ne 1 ] || [ `iptables -S | grep hbcBridge | wc -l` -ne 5 ]
+if [ `iptables -t nat -S | grep hbcBridge | wc -l` -ne 2 ] || [ `iptables -S | grep hbcBridge | wc -l` -ne 4 ]
 then
 	echo "Repair iptable entries"
 	create_bridge_iptable_entries
