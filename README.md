@@ -35,43 +35,83 @@ Tested on the following Linux distributions
 
 ## User Guide
 
-The repository contain the alpine image for both arm and amd64. Hence, let's start by lunching the alpine container with the command "/bin/sh"
+### Start Simple Alpine Container
 
 ````bash
+# Start Alpine container in interactive mode
 sudo hbc start alpine /bin/sh
 
-# Show network interfaces
-ifconfig
+# Install tcpdump
+apk update && apk add tcpdump
 
-# Start netcat for later use
-nc -l -p 8888
+# Exit the container
+exit
+
+# Clean inactive containers
+sudo hbc clean
 ````
 
-Let's assume the container receive the id 4UkcTplBHob0OSWSPz00tYNuiMT7qmTR (You will need to replace it below with our own container id). Let's open a new terminal and try the following:
+### Control Group (cgroups)
+
+The container registry contains the alpine image for both arm and amd64. Let's lunch a alpine container in daemon mode, limit the container memory usage to 50 MB and try to breach that limit. We will assume the container id is VpCokegzFqqlmUZ7bUlgzlBEs092B4vw in the following. You will need to update the below with your container id.
 
 ````bash
+# Start alpine container in daemon mode that will sleep for 30000 [s]
+sudo hbc start -d alpine "/bin/sleep 30000"
+
 # List running containers
 sudo hbc ps
 
-# Enter the running container
-sudo hbc exec 4UkcTplBHob0OSWSPz00tYNuiMT7qmTR /bin/sh
+# Limit the container memory usage to 50 MB using cgroups
+sudo hbc memory VpCokegzFqqlmUZ7bUlgzlBEs092B4vw 50000000
 
-# Install tcpdump
-apk update
-apk add tcpdump
+# Enter the alpine container
+sudo hbc exec VpCokegzFqqlmUZ7bUlgzlBEs092B4vw /bin/sh
 
-# exit the container
+# Install dev tools
+apk update && apk add git build-base
+
+# Checkout memory eater application
+git clone https://github.com/mscatdk/memoryeater.git /tmp
+
+# Compile the memory eater application
+cd /tmp/c/ && gcc memoryeater.c -o memoryeater
+
+# Try to allocate 100 MB in 10 MB increments (Should fail before reaching 50 MB)
+./memoryeater -s 10 -m 100
+
+# Exit the container
 exit
 
-# Expose port 8888 as port 9999 on the host
-sudo hbc expose 4UkcTplBHob0OSWSPz00tYNuiMT7qmTR 9999 8888
+# Stop the running container
+sudo hbc stop VpCokegzFqqlmUZ7bUlgzlBEs092B4vw
 
-# Point your browser on a different computer to host:9999
-# You can alternatively run the following command (you may need to change the IP based on the IP assigned your container)
-curl 10.3.0.2:8888  (Pres ctrl + c to exit)
+# Clean inactive containers
+sudo hbc clean
+````
+
+### Network
+
+Let's have a look at the container network by starting a Nginx container and expose the port 80. We will assume the container id is VpCokegzFqqlmUZ7bUlgzlBEs092B4vw in the following. You will need to update the below with your container id.
+
+````bash
+# Start Nginx container
+sudo hbc start -d nginx "nginx -g 'daemon off;'"
+
+# Expose port 80 on the container as port 80 on the host
+sudo hbc expose VpCokegzFqqlmUZ7bUlgzlBEs092B4vw 80 80
 
 # Stop the running container
-sudo hbc stop 4UkcTplBHob0OSWSPz00tYNuiMT7qmTR
+sudo hbc stop VpCokegzFqqlmUZ7bUlgzlBEs092B4vw
+
+# Run curl towards localhost
+curl localhost
+
+# Run curl towards the machine IP (You will need to update the IP and you can also access the page from antoher machine)
+curl 10.11.12.4
+
+# Stop the nginx container
+sudo hbc stop VpCokegzFqqlmUZ7bUlgzlBEs092B4vw
 
 # Clean inactive containers
 sudo hbc clean
