@@ -190,7 +190,7 @@ function locate_image() {
 	fi
 
 	mkdir -p $(dirname ${IMAGE_HOME}/${RELATIVE_PATH})
-	curl --fail https://msc.webhop.me/hbc/images/$RELATIVE_PATH -o ${IMAGE_HOME}/${RELATIVE_PATH}
+	curl --fail https://storage.googleapis.com/hbc-container-registry/images/$RELATIVE_PATH -o ${IMAGE_HOME}/${RELATIVE_PATH}
 	rc=$?
 	if [ $rc -eq 0 ]
 	then
