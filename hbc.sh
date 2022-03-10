@@ -520,8 +520,8 @@ function install_app() {
 		VERSION=$1
 	fi
 
-	download_file "https://msc.webhop.me/hbc/app/${VERSION}/hbc.sh" "${APP_HOME}/hbc.sh" $VERSION
-	download_file "https://msc.webhop.me/hbc/app/${VERSION}/bootstrap.sh" "${APP_HOME}/bootstrap.sh" $VERSION
+	download_file "https://storage.googleapis.com/hbc-container-registry/app/${VERSION}/hbc.sh" "${APP_HOME}/hbc.sh" $VERSION
+	download_file "https://storage.googleapis.com/hbc-container-registry/app/${VERSION}/bootstrap.sh" "${APP_HOME}/bootstrap.sh" $VERSION
 
 	chmod 755 "${APP_HOME}/hbc.sh"
 	chmod 755 "${APP_HOME}/bootstrap.sh"
